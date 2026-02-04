@@ -5,8 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.jira import JiraClient, JiraSettings, TicketData
+from src.jira.ac_formatter import append_acs_to_description, validate_acs
+
+if TYPE_CHECKING:
+    from src.ai import ACGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +27,18 @@ class PollingService:
         self,
         jira_client: JiraClient,
         settings: JiraSettings,
+        ac_generator: ACGenerator | None = None,
     ) -> None:
         """Initialize the polling service.
 
         Args:
             jira_client: JiraClient instance for API operations.
             settings: JiraSettings containing polling configuration.
+            ac_generator: Optional ACGenerator for AI-powered AC generation.
         """
         self._client = jira_client
         self._settings = settings
+        self._ac_generator = ac_generator
         self._failure_counts: dict[str, int] = {}  # In-memory failure tracking
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -182,9 +190,53 @@ class PollingService:
             logger.info("Skipping %s: already has acceptance criteria", ticket.key)
             return False
 
-        # Placeholder for AC generation (to be replaced with real implementation later)
-        logger.info("AC generation placeholder for %s", ticket.key)
-        ac_generation_success = True  # Simulate success for now
+        # 1. Generate ACs using AI
+        if self._ac_generator is None or not self._ac_generator.is_enabled:
+            logger.warning("AI generation disabled, skipping %s", ticket.key)
+            return False
+
+        generated_acs = await self._ac_generator.generate(
+            summary=ticket.summary,
+            description=ticket.description,
+        )
+
+        if not generated_acs:
+            logger.warning(
+                "AI determined insufficient information for %s, skipping",
+                ticket.key,
+            )
+            return False
+
+        # 2. Validate ACs
+        if not validate_acs(generated_acs, ticket.key):
+            logger.warning("No valid ACs to write for %s", ticket.key)
+            return False
+
+        # 3. Get current ticket with description_adf
+        try:
+            current_ticket = await self._client.get_ticket(ticket.key)
+        except Exception as e:
+            logger.error("Failed to fetch ticket %s for AC write: %s", ticket.key, e)
+            return False
+
+        # 4. Format and append ACs to existing description
+        updated_description = append_acs_to_description(
+            existing_adf=current_ticket.description_adf,
+            new_acs=generated_acs,
+        )
+
+        # 5. Write back to Jira
+        if updated_description:
+            ac_generation_success = await self._client.update_description(
+                ticket.key, updated_description
+            )
+            if ac_generation_success:
+                logger.info("Successfully wrote ACs to %s", ticket.key)
+            else:
+                logger.error("Failed to write ACs to %s after retries", ticket.key)
+        else:
+            logger.warning("No ACs to write for %s (empty result)", ticket.key)
+            ac_generation_success = False
 
         if not ac_generation_success:
             # Record failure

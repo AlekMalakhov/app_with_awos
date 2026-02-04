@@ -519,7 +519,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets returns list of TicketData when API returns issues."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
             method="GET",
             status_code=200,
             json={
@@ -582,7 +582,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets returns empty list when API returns no issues."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search?jql=project+%3D+NONEXISTENT&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+NONEXISTENT&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
             method="GET",
             status_code=200,
             json={
@@ -616,14 +616,14 @@ class TestJiraClientSearchTickets:
         """
         # First response: 500 Server Error
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
             method="GET",
             status_code=500,
             json={"message": "Internal Server Error"},
         )
         # Second response: 200 Success
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
             method="GET",
             status_code=200,
             json={
@@ -664,7 +664,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets raises JiraAuthenticationError on HTTP 401."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
             method="GET",
             status_code=401,
             json={"message": "Unauthorized"},
@@ -686,7 +686,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets raises JiraAuthenticationError on HTTP 403."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
             method="GET",
             status_code=403,
             json={"message": "Forbidden"},
@@ -869,5 +869,299 @@ class TestJiraClientAddLabel:
             result = await client.add_label("PROJ-123", "ac-generated")
 
             assert result is False
+        finally:
+            await client.close()
+
+
+class TestJiraClientUpdateDescription:
+    """Test suite for JiraClient.update_description() method."""
+
+    @pytest.fixture
+    def sample_adf(self) -> dict:
+        """Create a sample ADF document for testing."""
+        return {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Test description"}],
+                }
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_update_description_success_returns_true(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns True when API returns 204 No Content."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+            status_code=204,
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is True
+
+            # Verify the request was made with correct payload
+            requests = httpx_mock.get_requests()
+            assert len(requests) == 1
+            assert requests[0].method == "PUT"
+            assert requests[0].url.path == "/rest/api/3/issue/PROJ-123"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_success_200_returns_true(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns True when API returns 200 OK."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-456",
+            method="PUT",
+            status_code=200,
+            json={},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-456", sample_adf)
+
+            assert result is True
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_not_found_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns False when ticket not found (404)."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-999",
+            method="PUT",
+            status_code=404,
+            json={"errorMessages": ["Issue does not exist"]},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-999", sample_adf)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_auth_failure_401_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns False on 401 auth failure."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+            status_code=401,
+            json={"message": "Unauthorized"},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_auth_failure_403_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns False on 403 forbidden."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+            status_code=403,
+            json={"message": "Forbidden"},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    @patch("asyncio.sleep", return_value=None)
+    async def test_update_description_retry_on_5xx(
+        self,
+        mock_sleep,
+        httpx_mock: HTTPXMock,
+        jira_settings_with_retries: JiraSettings,
+        sample_adf: dict,
+    ):
+        """Test that update_description retries on 500 error and succeeds."""
+        # First response: 500 Server Error
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+            status_code=500,
+            json={"message": "Internal Server Error"},
+        )
+        # Second response: 204 Success
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+            status_code=204,
+        )
+
+        client = JiraClient(jira_settings_with_retries)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is True
+
+            # Verify exactly 2 requests were made
+            requests = httpx_mock.get_requests()
+            assert len(requests) == 2
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    @patch("asyncio.sleep", return_value=None)
+    async def test_update_description_retry_exhausted_returns_false(
+        self,
+        mock_sleep,
+        httpx_mock: HTTPXMock,
+        jira_settings_with_retries: JiraSettings,
+        sample_adf: dict,
+    ):
+        """Test that update_description returns False after retries exhausted."""
+        # All 3 attempts return 500
+        for _ in range(3):
+            httpx_mock.add_response(
+                url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+                method="PUT",
+                status_code=500,
+                json={"message": "Internal Server Error"},
+            )
+
+        client = JiraClient(jira_settings_with_retries)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is False
+
+            # Verify exactly 3 requests were made (max_retries=3)
+            requests = httpx_mock.get_requests()
+            assert len(requests) == 3
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_empty_issue_key_returns_false(
+        self, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns False for empty issue key."""
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("", sample_adf)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_empty_adf_returns_false(
+        self, jira_settings: JiraSettings
+    ):
+        """Test that update_description returns False for empty ADF."""
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", {})
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_none_adf_returns_false(
+        self, jira_settings: JiraSettings
+    ):
+        """Test that update_description returns False for None ADF."""
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", None)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_connection_error_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns False on connection error."""
+        httpx_mock.add_exception(
+            httpx.ConnectError("Connection refused"),
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_timeout_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description returns False on timeout."""
+        httpx_mock.add_exception(
+            httpx.TimeoutException("Request timed out"),
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.update_description("PROJ-123", sample_adf)
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_update_description_sends_correct_payload(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings, sample_adf: dict
+    ):
+        """Test that update_description sends the ADF in the correct JSON structure."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123",
+            method="PUT",
+            status_code=204,
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            await client.update_description("PROJ-123", sample_adf)
+
+            requests = httpx_mock.get_requests()
+            assert len(requests) == 1
+
+            import json
+
+            payload = json.loads(requests[0].content)
+            assert "fields" in payload
+            assert "description" in payload["fields"]
+            assert payload["fields"]["description"] == sample_adf
         finally:
             await client.close()

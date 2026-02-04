@@ -5,7 +5,7 @@
 ## 1. Application & Technology Stack
 
 - **Backend Framework:** Python + FastAPI
-- **AI/LLM Provider:** AWS Bedrock
+- **AI/LLM Provider:** Anthropic Claude API
 - **Language Version:** Python 3.11+
 
 ---
@@ -31,7 +31,7 @@
 - **Jira Trigger Mechanism:** Jira Automation rules (calls service endpoint on ticket creation)
 - **Barley API:** Context enrichment when ticket descriptions lack detail (Phase 2)
 - **Slack API:** DM escalation to PO/DM, approval workflow via Slack interactions (Phase 2-3)
-- **AWS Bedrock:** AI-powered acceptance criteria generation
+- **Anthropic Claude API:** AI-powered acceptance criteria generation (Claude Sonnet 4)
 
 ---
 

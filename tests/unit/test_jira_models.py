@@ -208,5 +208,53 @@ class TestTicketDataSerialization:
 
         result = ticket.model_dump()
 
-        expected_keys = {"key", "summary", "description", "issue_type"}
+        expected_keys = {"key", "summary", "description", "description_adf", "issue_type"}
         assert set(result.keys()) == expected_keys
+
+
+class TestTicketDataDescriptionAdf:
+    """Test suite for TicketData description_adf field."""
+
+    def test_description_adf_defaults_to_none(self):
+        """Test that description_adf defaults to None when not provided."""
+        ticket = TicketData(
+            key="PROJ-123",
+            summary="Test summary",
+            description="Test description",
+            issue_type="Story",
+        )
+
+        assert ticket.description_adf is None
+
+    def test_description_adf_can_be_set(self):
+        """Test that description_adf can be set to a dictionary."""
+        adf = {
+            "type": "doc",
+            "version": 1,
+            "content": [{"type": "paragraph", "content": []}],
+        }
+        ticket = TicketData(
+            key="PROJ-123",
+            summary="Test summary",
+            description="Test description",
+            description_adf=adf,
+            issue_type="Story",
+        )
+
+        assert ticket.description_adf == adf
+
+    def test_description_adf_included_in_model_dump(self):
+        """Test that description_adf is included in model_dump output."""
+        adf = {"type": "doc", "version": 1, "content": []}
+        ticket = TicketData(
+            key="PROJ-123",
+            summary="Test summary",
+            description="Test description",
+            description_adf=adf,
+            issue_type="Story",
+        )
+
+        result = ticket.model_dump()
+
+        assert "description_adf" in result
+        assert result["description_adf"] == adf

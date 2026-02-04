@@ -10,10 +10,10 @@ _The foundational integration layer — connecting to Jira and generating basic 
 
 - [ ] **Jira Integration Foundation**
   - [x] **Jira API Connection:** Establish secure connection to read ticket descriptions from Stories and Tasks.
-  - [ ] **Write ACs Back to Jira:** Enable writing generated acceptance criteria to the ticket's AC field.
+  - [x] **Write ACs Back to Jira:** Enable writing generated acceptance criteria to the ticket's AC field.
 
 - [ ] **Core AC Generation**
-  - [ ] **AI-Powered AC Generation:** Parse ticket descriptions and generate structured, actionable acceptance criteria using AI.
+  - [x] **AI-Powered AC Generation:** Parse ticket descriptions and generate structured, actionable acceptance criteria using AI.
   - [x] **Automatic Trigger on Ticket Creation:** Automatically invoke AC generation when a new Story/Task is created.
   - [ ] **Manual Re-Trigger Capability:** Allow users to manually request AC regeneration on demand.
 

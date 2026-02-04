@@ -9,6 +9,7 @@ This module provides common fixtures for testing Jira API integration:
 import os
 
 import pytest
+import pytest_asyncio
 
 from src.jira import JiraClient, JiraSettings
 
@@ -29,7 +30,7 @@ def jira_settings_from_env():
     return JiraSettings()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def jira_client(jira_settings_from_env):
     """Create a JiraClient instance and ensure cleanup.
 
@@ -62,3 +63,20 @@ def requires_jira_credentials():
     """
     if not os.getenv("JIRA_API_TOKEN"):
         pytest.skip("Jira credentials not available")
+
+
+@pytest.fixture
+def requires_anthropic_credentials():
+    """Skip test if Anthropic credentials are not available.
+
+    Use this fixture in tests that require real Anthropic API credentials
+    to ensure they are skipped gracefully in environments without
+    the necessary configuration.
+
+    Usage:
+        def test_something(requires_anthropic_credentials):
+            # This test will be skipped if ANTHROPIC_API_KEY is not set
+            ...
+    """
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        pytest.skip("Anthropic credentials not available")

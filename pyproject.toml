@@ -1,0 +1,43 @@
+[project]
+name = "jira-ac-assistant"
+version = "0.1.0"
+description = "AI-Powered Acceptance Criteria Generation for Jira"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40.0",
+    "fastapi>=0.128.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.0",
+    "tenacity>=9.1.0",
+    "uvicorn>=0.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-httpx>=0.36.0",
+    "ruff>=0.9.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

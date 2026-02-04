@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
+from src.ai import ACGenerator, AISettings
 from src.jira.client import JiraClient
 from src.jira.config import JiraSettings
 from src.jira.exceptions import JiraAuthenticationError, JiraConnectionError
@@ -43,6 +44,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error(f"Jira unreachable: {e}")
         sys.exit(1)
 
+    # Create AI generator if API key is configured
+    ai_settings = AISettings()
+    ac_generator = ACGenerator(ai_settings) if ai_settings.is_enabled else None
+
+    if ac_generator:
+        logger.info("AI generation enabled with model: %s", ai_settings.ai_model)
+    else:
+        logger.warning("AI generation disabled (ANTHROPIC_API_KEY not set)")
+
     # Start polling service if enabled
     polling_service = None
     if settings.polling_enabled:
@@ -50,7 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error("JIRA_PROJECT_KEY required when polling is enabled")
             sys.exit(1)
 
-        polling_service = PollingService(jira_client, settings)
+        polling_service = PollingService(jira_client, settings, ac_generator)
         await polling_service.start()
         logger.info(f"Polling service started (interval: {settings.polling_interval_seconds}s)")
 

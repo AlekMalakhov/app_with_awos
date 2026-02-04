@@ -11,10 +11,14 @@ from src.jira.exceptions import JiraAuthenticationError, JiraConnectionError
 class TestAppStartupSuccess:
     """Test suite for successful application startup."""
 
+    @patch("src.main.AISettings")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
     def test_startup_with_valid_credentials_starts_app_successfully(
-        self, mock_settings_class: MagicMock, mock_client_class: MagicMock
+        self,
+        mock_settings_class: MagicMock,
+        mock_client_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
     ):
         """Test that app starts successfully when Jira credentials are valid.
 
@@ -35,6 +39,11 @@ class TestAppStartupSuccess:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings (disabled)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
+
         # Act & Assert: Import app after mocking to apply patches
         from src.main import app
 
@@ -50,12 +59,14 @@ class TestAppStartupSuccess:
             mock_client_class.assert_called_once_with(mock_settings)
             mock_client.validate_connection.assert_called_once()
 
+    @patch("src.main.AISettings")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
     def test_startup_logs_success_message(
         self,
         mock_settings_class: MagicMock,
         mock_client_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ):
         """Test that successful startup logs the validation success message.
@@ -75,6 +86,11 @@ class TestAppStartupSuccess:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings (disabled)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
+
         # Act: Import app after mocking and start via TestClient
         from src.main import app
 
@@ -85,10 +101,14 @@ class TestAppStartupSuccess:
         # Assert: Success message was logged
         assert "Jira connection validated successfully" in caplog.text
 
+    @patch("src.main.AISettings")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
     def test_startup_stores_client_in_app_state(
-        self, mock_settings_class: MagicMock, mock_client_class: MagicMock
+        self,
+        mock_settings_class: MagicMock,
+        mock_client_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
     ):
         """Test that JiraClient is stored in app.state after successful startup.
 
@@ -107,6 +127,11 @@ class TestAppStartupSuccess:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings (disabled)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
+
         # Act: Import app after mocking
         from src.main import app
 
@@ -115,10 +140,14 @@ class TestAppStartupSuccess:
             assert hasattr(app.state, "jira_client")
             assert app.state.jira_client is mock_client
 
+    @patch("src.main.AISettings")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
     def test_shutdown_closes_jira_client(
-        self, mock_settings_class: MagicMock, mock_client_class: MagicMock
+        self,
+        mock_settings_class: MagicMock,
+        mock_client_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
     ):
         """Test that JiraClient is closed on application shutdown.
 
@@ -136,6 +165,11 @@ class TestAppStartupSuccess:
         mock_client.validate_connection = AsyncMock(return_value=True)
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
+
+        # Arrange: Mock AISettings (disabled)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
 
         # Act: Import app after mocking, then enter and exit TestClient
         from src.main import app
@@ -360,6 +394,8 @@ class TestAppStartupConnectionFailure:
 class TestPollingServiceIntegration:
     """Test suite for polling service integration with application startup."""
 
+    @patch("src.main.ACGenerator")
+    @patch("src.main.AISettings")
     @patch("src.main.PollingService")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
@@ -368,6 +404,8 @@ class TestPollingServiceIntegration:
         mock_settings_class: MagicMock,
         mock_client_class: MagicMock,
         mock_polling_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
+        mock_ac_generator_class: MagicMock,
     ):
         """Test that polling service is started when polling_enabled is True.
 
@@ -390,6 +428,16 @@ class TestPollingServiceIntegration:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings with AI enabled
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = True
+        mock_ai_settings.ai_model = "claude-sonnet-4-20250514"
+        mock_ai_settings_class.return_value = mock_ai_settings
+
+        # Arrange: Mock ACGenerator
+        mock_ac_generator = MagicMock()
+        mock_ac_generator_class.return_value = mock_ac_generator
+
         # Arrange: Mock PollingService
         mock_polling_service = AsyncMock()
         mock_polling_service.start = AsyncMock()
@@ -400,14 +448,18 @@ class TestPollingServiceIntegration:
         from src.main import app
 
         with TestClient(app):
-            # Assert: PollingService was instantiated and started
-            mock_polling_class.assert_called_once_with(mock_client, mock_settings)
+            # Assert: PollingService was instantiated with ac_generator and started
+            mock_polling_class.assert_called_once_with(
+                mock_client, mock_settings, mock_ac_generator
+            )
             mock_polling_service.start.assert_called_once()
 
             # Assert: PollingService is stored in app.state
             assert hasattr(app.state, "polling_service")
             assert app.state.polling_service is mock_polling_service
 
+    @patch("src.main.ACGenerator")
+    @patch("src.main.AISettings")
     @patch("src.main.PollingService")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
@@ -416,6 +468,8 @@ class TestPollingServiceIntegration:
         mock_settings_class: MagicMock,
         mock_client_class: MagicMock,
         mock_polling_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
+        mock_ac_generator_class: MagicMock,
     ):
         """Test that polling service is stopped on application shutdown.
 
@@ -436,6 +490,16 @@ class TestPollingServiceIntegration:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings with AI enabled
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = True
+        mock_ai_settings.ai_model = "claude-sonnet-4-20250514"
+        mock_ai_settings_class.return_value = mock_ai_settings
+
+        # Arrange: Mock ACGenerator
+        mock_ac_generator = MagicMock()
+        mock_ac_generator_class.return_value = mock_ac_generator
+
         # Arrange: Mock PollingService
         mock_polling_service = AsyncMock()
         mock_polling_service.start = AsyncMock()
@@ -451,6 +515,8 @@ class TestPollingServiceIntegration:
         # Assert: stop() was called on shutdown
         mock_polling_service.stop.assert_called_once()
 
+    @patch("src.main.ACGenerator")
+    @patch("src.main.AISettings")
     @patch("src.main.PollingService")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
@@ -459,6 +525,8 @@ class TestPollingServiceIntegration:
         mock_settings_class: MagicMock,
         mock_client_class: MagicMock,
         mock_polling_class: MagicMock,
+        mock_ai_settings_class: MagicMock,
+        mock_ac_generator_class: MagicMock,
     ):
         """Test that polling service is NOT started when polling_enabled is False.
 
@@ -478,6 +546,11 @@ class TestPollingServiceIntegration:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings (AI disabled)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
+
         # Act: Import app after mocking
         from src.main import app
 
@@ -489,6 +562,7 @@ class TestPollingServiceIntegration:
             assert hasattr(app.state, "polling_service")
             assert app.state.polling_service is None
 
+    @patch("src.main.AISettings")
     @patch("src.main.sys.exit")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
@@ -497,6 +571,7 @@ class TestPollingServiceIntegration:
         mock_settings_class: MagicMock,
         mock_client_class: MagicMock,
         mock_exit: MagicMock,
+        mock_ai_settings_class: MagicMock,
     ):
         """Test that app exits with error when polling_enabled=True but project_key is empty.
 
@@ -517,6 +592,11 @@ class TestPollingServiceIntegration:
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
 
+        # Arrange: Mock AISettings (disabled to avoid ACGenerator creation)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
+
         # Act: Import app after mocking
         from src.main import app
 
@@ -529,6 +609,7 @@ class TestPollingServiceIntegration:
         # Assert: sys.exit was called with exit code 1
         mock_exit.assert_called_once_with(1)
 
+    @patch("src.main.AISettings")
     @patch("src.main.sys.exit")
     @patch("src.main.JiraClient")
     @patch("src.main.JiraSettings")
@@ -537,6 +618,7 @@ class TestPollingServiceIntegration:
         mock_settings_class: MagicMock,
         mock_client_class: MagicMock,
         mock_exit: MagicMock,
+        mock_ai_settings_class: MagicMock,
         caplog: pytest.LogCaptureFixture,
     ):
         """Test that an error is logged when polling is enabled but project_key is missing.
@@ -557,6 +639,11 @@ class TestPollingServiceIntegration:
         mock_client.validate_connection = AsyncMock(return_value=True)
         mock_client.close = AsyncMock()
         mock_client_class.return_value = mock_client
+
+        # Arrange: Mock AISettings (disabled to avoid ACGenerator creation)
+        mock_ai_settings = MagicMock()
+        mock_ai_settings.is_enabled = False
+        mock_ai_settings_class.return_value = mock_ai_settings
 
         # Act: Import app after mocking
         from src.main import app

@@ -288,6 +288,7 @@ class JiraClient:
             key=key,
             summary=summary,
             description=description,
+            description_adf=description_adf,
             issue_type=issue_type,
         )
 
@@ -385,11 +386,100 @@ class JiraClient:
                     key=key,
                     summary=summary,
                     description=description,
+                    description_adf=description_adf,
                     issue_type=issue_type,
                 )
             )
 
         return tickets
+
+    async def update_description(self, issue_key: str, description_adf: dict) -> bool:
+        """Update the description field of a Jira ticket.
+
+        Uses exponential backoff retry for transient errors (5xx, 429, network issues).
+
+        Args:
+            issue_key: The Jira issue key (e.g., "PROJ-123").
+            description_adf: The new description in Atlassian Document Format (ADF).
+
+        Returns:
+            True if the update succeeded, False otherwise.
+        """
+        if not issue_key:
+            logger.error("Cannot update description: empty issue key")
+            return False
+
+        if not description_adf:
+            logger.error("Cannot update description for %s: empty ADF", issue_key)
+            return False
+
+        @retry(
+            stop=stop_after_attempt(self._settings.max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=16),
+            retry=retry_if_exception(_is_retryable_error),
+            reraise=True,
+        )
+        async def _update_with_retry() -> bool:
+            response = await self._client.put(
+                f"/rest/api/3/issue/{issue_key}",
+                json={"fields": {"description": description_adf}},
+            )
+
+            if 200 <= response.status_code < 300:
+                return True
+
+            if response.status_code == 404:
+                logger.error("Ticket %s not found", issue_key)
+                return False
+
+            if response.status_code in (401, 403):
+                logger.error(
+                    "Authentication failed when updating %s: HTTP %d",
+                    issue_key,
+                    response.status_code,
+                )
+                return False
+
+            # Retry on 5xx server errors and 429 rate limiting
+            if response.status_code >= 500 or response.status_code == 429:
+                raise _RetryableHTTPError(
+                    f"Retryable HTTP error: {response.status_code}"
+                )
+
+            # 4xx errors (except 404 and 429) should fail immediately without retry
+            logger.error(
+                "Failed to update description for %s: HTTP %d - %s",
+                issue_key,
+                response.status_code,
+                response.text,
+            )
+            return False
+
+        try:
+            return await _update_with_retry()
+        except RetryError as e:
+            last_exception = e.last_attempt.exception()
+            logger.error(
+                "Failed to update description for %s after %d retries: %s",
+                issue_key,
+                self._settings.max_retries,
+                last_exception,
+            )
+            return False
+        except _RetryableHTTPError as e:
+            logger.error(
+                "Failed to update description for %s after %d retries: %s",
+                issue_key,
+                self._settings.max_retries,
+                e,
+            )
+            return False
+        except httpx.TimeoutException as e:
+            logger.error("Request to update %s timed out: %s", issue_key, e)
+            return False
+        except httpx.RequestError as e:
+            logger.error("Failed to connect to Jira when updating %s: %s", issue_key, e)
+            return False
 
     async def add_label(self, issue_key: str, label: str) -> bool:
         """Add a label to a Jira ticket.

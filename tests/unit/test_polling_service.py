@@ -505,15 +505,31 @@ class TestPollingServicePrerequisiteValidation:
     """Test suite for prerequisite validation methods (_has_existing_acs, _process_ticket)."""
 
     @pytest.fixture
+    def mock_ac_generator(self) -> MagicMock:
+        """Create a mock ACGenerator for prerequisite validation tests."""
+        mock = MagicMock()
+        mock.is_enabled = True
+        mock.generate = AsyncMock(
+            return_value=[
+                "User can perform the described action",
+                "System responds within acceptable time limits",
+                "Error states are handled gracefully",
+            ]
+        )
+        return mock
+
+    @pytest.fixture
     def service(
         self,
         mock_jira_client: MagicMock,
         mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
     ) -> PollingService:
         """Create a PollingService instance for prerequisite validation tests."""
         return PollingService(
             jira_client=mock_jira_client,
             settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
         )
 
     # Tests for _has_existing_acs
@@ -618,15 +634,16 @@ class TestPollingServicePrerequisiteValidation:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Verify _process_ticket returns True for valid ticket without existing ACs."""
-        # Mock add_label to return True for success path
-        service._client.add_label = AsyncMock(return_value=True)
-
         ticket = TicketData(
             key="TEST-103",
             summary="Valid ticket needing ACs",
             description="As a user, I want to perform an action so that I get a benefit.",
             issue_type="Story",
         )
+        # Mock Jira client methods for success path
+        service._client.add_label = AsyncMock(return_value=True)
+        service._client.get_ticket = AsyncMock(return_value=ticket)
+        service._client.update_description = AsyncMock(return_value=True)
 
         with caplog.at_level(logging.DEBUG, logger="src.polling.service"):
             result = await service._process_ticket(ticket)
@@ -657,15 +674,31 @@ class TestPollingServiceSuccessFlow:
         )
 
     @pytest.fixture
+    def mock_ac_generator(self) -> MagicMock:
+        """Create a mock ACGenerator for success flow tests."""
+        mock = MagicMock()
+        mock.is_enabled = True
+        mock.generate = AsyncMock(
+            return_value=[
+                "User can perform the described action",
+                "System responds within acceptable time limits",
+                "Error states are handled gracefully",
+            ]
+        )
+        return mock
+
+    @pytest.fixture
     def service(
         self,
         mock_jira_client: MagicMock,
         mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
     ) -> PollingService:
         """Create a PollingService instance for success flow tests."""
         return PollingService(
             jira_client=mock_jira_client,
             settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
         )
 
     @pytest.fixture
@@ -686,6 +719,8 @@ class TestPollingServiceSuccessFlow:
     ) -> None:
         """Verify add_label is called with correct ticket key and label on success."""
         service._client.add_label = AsyncMock(return_value=True)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
 
         await service._process_ticket(valid_ticket)
 
@@ -700,6 +735,8 @@ class TestPollingServiceSuccessFlow:
     ) -> None:
         """Verify success is logged with timestamp when label is added successfully."""
         service._client.add_label = AsyncMock(return_value=True)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
 
         with caplog.at_level(logging.INFO, logger="src.polling.service"):
             result = await service._process_ticket(valid_ticket)
@@ -728,6 +765,8 @@ class TestPollingServiceSuccessFlow:
     ) -> None:
         """Verify warning is logged when add_label fails."""
         service._client.add_label = AsyncMock(return_value=False)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
 
         with caplog.at_level(logging.WARNING, logger="src.polling.service"):
             result = await service._process_ticket(valid_ticket)
@@ -757,11 +796,15 @@ class TestPollingServiceSuccessFlow:
         """Verify _process_ticket returns True even when label addition fails."""
         # Test with label success
         service._client.add_label = AsyncMock(return_value=True)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
         result_with_label = await service._process_ticket(valid_ticket)
         assert result_with_label is True
 
         # Test with label failure
         service._client.add_label = AsyncMock(return_value=False)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
         result_without_label = await service._process_ticket(valid_ticket)
         assert result_without_label is True
 
@@ -789,15 +832,31 @@ class TestPollingServiceFailureTracking:
         )
 
     @pytest.fixture
+    def mock_ac_generator(self) -> MagicMock:
+        """Create a mock ACGenerator for failure tracking tests."""
+        mock = MagicMock()
+        mock.is_enabled = True
+        mock.generate = AsyncMock(
+            return_value=[
+                "User can perform the described action",
+                "System responds within acceptable time limits",
+                "Error states are handled gracefully",
+            ]
+        )
+        return mock
+
+    @pytest.fixture
     def service(
         self,
         mock_jira_client: MagicMock,
         mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
     ) -> PollingService:
         """Create a PollingService instance for failure tracking tests."""
         return PollingService(
             jira_client=mock_jira_client,
             settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
         )
 
     @pytest.fixture
@@ -1027,6 +1086,8 @@ class TestPollingServiceFailureTracking:
     ) -> None:
         """Verify successful processing clears any prior failure count."""
         service._client.add_label = AsyncMock(return_value=True)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
 
         # Pre-set a failure count
         service._failure_counts[valid_ticket.key] = 2
@@ -1044,6 +1105,8 @@ class TestPollingServiceFailureTracking:
     ) -> None:
         """Verify success clears failure count even after multiple prior failures."""
         service._client.add_label = AsyncMock(return_value=True)
+        service._client.get_ticket = AsyncMock(return_value=valid_ticket)
+        service._client.update_description = AsyncMock(return_value=True)
 
         # Pre-set multiple failures (but below max)
         service._failure_counts[valid_ticket.key] = (
@@ -1055,3 +1118,311 @@ class TestPollingServiceFailureTracking:
 
         assert result is True
         assert valid_ticket.key not in service._failure_counts
+
+
+class TestPollingServiceACGeneratorIntegration:
+    """Test suite for PollingService integration with ACGenerator."""
+
+    @pytest.fixture
+    def mock_jira_client(self) -> MagicMock:
+        """Create a mock JiraClient for AC generator integration tests."""
+        return MagicMock(spec=JiraClient)
+
+    @pytest.fixture
+    def mock_jira_settings(self) -> JiraSettings:
+        """Create mock JiraSettings for AC generator integration tests."""
+        return JiraSettings(
+            base_url="https://test.atlassian.net",
+            user_email="test@example.com",
+            api_token="test-api-token",
+            project_key="TEST",
+            polling_enabled=True,
+            polling_interval_seconds=1,
+            polling_lookback_days=7,
+            polling_max_failures=3,
+        )
+
+    @pytest.fixture
+    def mock_ac_generator(self) -> MagicMock:
+        """Create a mock ACGenerator for testing."""
+        mock = MagicMock()
+        mock.is_enabled = True
+        mock.generate = AsyncMock(
+            return_value=[
+                "User can perform the described action",
+                "System responds within acceptable time limits",
+                "Error states are handled gracefully",
+            ]
+        )
+        return mock
+
+    @pytest.fixture
+    def valid_ticket(self) -> TicketData:
+        """Create a valid ticket that passes prerequisite checks."""
+        return TicketData(
+            key="TEST-400",
+            summary="Valid ticket for AC generator tests",
+            description="As a user, I want to test AC generation integration.",
+            issue_type="Story",
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_ticket_calls_ac_generator_generate(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify _process_ticket calls ac_generator.generate() with correct args."""
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+        )
+
+        await service._process_ticket(valid_ticket)
+
+        mock_ac_generator.generate.assert_called_once_with(
+            summary=valid_ticket.summary,
+            description=valid_ticket.description,
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_ticket_writes_generated_acs_to_jira(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify _process_ticket writes AI-generated ACs to Jira."""
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+        mock_jira_client.update_description.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_process_ticket_returns_false_when_ac_generator_is_none(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        valid_ticket: TicketData,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Verify _process_ticket returns False when ac_generator is None."""
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=None,  # No AC generator
+        )
+
+        with caplog.at_level(logging.WARNING, logger="src.polling.service"):
+            result = await service._process_ticket(valid_ticket)
+
+        assert result is False
+        assert any(
+            "AI generation disabled, skipping TEST-400" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_ticket_returns_false_when_ac_generator_is_disabled(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        valid_ticket: TicketData,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Verify _process_ticket returns False when ac_generator.is_enabled is False."""
+        mock_generator = MagicMock()
+        mock_generator.is_enabled = False  # Generator exists but is disabled
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_generator,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="src.polling.service"):
+            result = await service._process_ticket(valid_ticket)
+
+        assert result is False
+        assert any(
+            "AI generation disabled, skipping TEST-400" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_ticket_returns_false_when_generate_returns_empty_list(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        valid_ticket: TicketData,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Verify _process_ticket returns False when ac_generator.generate() returns []."""
+        mock_generator = MagicMock()
+        mock_generator.is_enabled = True
+        mock_generator.generate = AsyncMock(return_value=[])  # Empty list = insufficient info
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_generator,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="src.polling.service"):
+            result = await service._process_ticket(valid_ticket)
+
+        assert result is False
+        assert any(
+            "AI determined insufficient information for TEST-400" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_ac_generated_label_not_added_when_ai_returns_empty_list(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify ac-generated label is NOT added when AI returns empty list."""
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+
+        mock_generator = MagicMock()
+        mock_generator.is_enabled = True
+        mock_generator.generate = AsyncMock(return_value=[])
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_generator,
+        )
+
+        await service._process_ticket(valid_ticket)
+
+        # Verify add_label was NOT called (since processing was skipped)
+        mock_jira_client.add_label.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ac_generated_label_added_on_success(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify ac-generated label is added when AI generation succeeds."""
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+        mock_jira_client.add_label.assert_called_once_with("TEST-400", "ac-generated")
+
+    @pytest.mark.asyncio
+    async def test_prerequisite_checks_run_before_ai_generation(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+    ) -> None:
+        """Verify prerequisite checks (empty description, existing ACs) run before AI call."""
+        # Ticket with existing ACs - should skip AI generation
+        ticket_with_acs = TicketData(
+            key="TEST-401",
+            summary="Ticket with existing ACs",
+            description="Description\n\n## Acceptance Criteria\n- Already has ACs",
+            issue_type="Story",
+        )
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+        )
+
+        result = await service._process_ticket(ticket_with_acs)
+
+        assert result is False
+        # AC generator should NOT be called because ticket already has ACs
+        mock_ac_generator.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_description_skips_ai_generation(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+    ) -> None:
+        """Verify empty description causes skip before AI generation is called."""
+        ticket_empty_desc = TicketData(
+            key="TEST-402",
+            summary="Ticket with empty description",
+            description="",
+            issue_type="Story",
+        )
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+        )
+
+        result = await service._process_ticket(ticket_empty_desc)
+
+        assert result is False
+        # AC generator should NOT be called because description is empty
+        mock_ac_generator.generate.assert_not_called()
+
+    def test_polling_service_init_accepts_ac_generator(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+    ) -> None:
+        """Verify PollingService.__init__ accepts ac_generator parameter."""
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+        )
+
+        assert service._ac_generator is mock_ac_generator
+
+    def test_polling_service_init_ac_generator_defaults_to_none(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+    ) -> None:
+        """Verify PollingService.__init__ defaults ac_generator to None."""
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+        )
+
+        assert service._ac_generator is None
