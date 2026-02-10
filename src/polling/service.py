@@ -125,14 +125,14 @@ class PollingService:
             JQL query string that finds:
             - Tickets in the configured project
             - With configured issue types (Story, Task, etc.)
-            - Without "ac-generated" or "ac-generation-failed" labels
+            - Without "ac-generated", "ac-generation-failed", or "regenerating" labels
             - Created within the lookback window
             - Ordered by created date ascending (oldest first)
         """
         return (
             f"project = {self._settings.project_key} "
             f"AND issuetype in ({self._settings.issue_types}) "
-            f'AND labels not in ("ac-generated", "ac-generation-failed") '
+            f'AND labels not in ("ac-generated", "ac-generation-failed", "regenerating") '
             f"AND created >= -{self._settings.polling_lookback_days}d "
             f"ORDER BY created ASC"
         )

@@ -15,7 +15,7 @@ _The foundational integration layer — connecting to Jira and generating basic 
 - [ ] **Core AC Generation**
   - [x] **AI-Powered AC Generation:** Parse ticket descriptions and generate structured, actionable acceptance criteria using AI.
   - [x] **Automatic Trigger on Ticket Creation:** Automatically invoke AC generation when a new Story/Task is created.
-  - [ ] **Manual Re-Trigger Capability:** Allow users to manually request AC regeneration on demand.
+  - [x] **Manual Re-Trigger Capability:** Allow users to manually request AC regeneration on demand.
 
 ---
 

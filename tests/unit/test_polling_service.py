@@ -232,7 +232,7 @@ class TestPollingServiceBuildJql:
         # Verify all JQL components are present
         assert "project = TEST" in jql
         assert "issuetype in (Story,Task)" in jql
-        assert 'labels not in ("ac-generated", "ac-generation-failed")' in jql
+        assert 'labels not in ("ac-generated", "ac-generation-failed", "regenerating")' in jql
         assert "created >= -7d" in jql
         assert "ORDER BY created ASC" in jql
 
@@ -253,7 +253,7 @@ class TestPollingServiceBuildJql:
 
         assert "project = PROJ" in jql
         assert "issuetype in (Bug,Epic,Spike)" in jql
-        assert 'labels not in ("ac-generated", "ac-generation-failed")' in jql
+        assert 'labels not in ("ac-generated", "ac-generation-failed", "regenerating")' in jql
         assert "created >= -7d" in jql
         assert "ORDER BY created ASC" in jql
 
@@ -274,7 +274,7 @@ class TestPollingServiceBuildJql:
 
         assert "project = MYPROJ" in jql
         assert "issuetype in (Story,Task)" in jql
-        assert 'labels not in ("ac-generated", "ac-generation-failed")' in jql
+        assert 'labels not in ("ac-generated", "ac-generation-failed", "regenerating")' in jql
         assert "created >= -14d" in jql
         assert "ORDER BY created ASC" in jql
 
@@ -298,7 +298,7 @@ class TestPollingServiceBuildJql:
         expected_jql = (
             "project = ABC "
             "AND issuetype in (Story) "
-            'AND labels not in ("ac-generated", "ac-generation-failed") '
+            'AND labels not in ("ac-generated", "ac-generation-failed", "regenerating") '
             "AND created >= -30d "
             "ORDER BY created ASC"
         )
@@ -321,6 +321,28 @@ class TestPollingServiceBuildJql:
 
         assert "issuetype in (Task)" in jql
         assert "project = SINGLE" in jql
+
+    def test_build_jql_excludes_regenerating_label(
+        self, mock_jira_client: MagicMock
+    ) -> None:
+        """Verify JQL excludes tickets with 'regenerating' label.
+
+        The 'regenerating' label is added by the manual regeneration service
+        to signal that a ticket is being processed via Slack DM. The polling
+        service must skip these tickets to prevent conflicting writes.
+        """
+        settings = JiraSettings(
+            base_url="https://test.atlassian.net",
+            user_email="test@example.com",
+            api_token="test-api-token",
+            project_key="TEST",
+        )
+        service = PollingService(jira_client=mock_jira_client, settings=settings)
+
+        jql = service._build_jql()
+
+        assert '"regenerating"' in jql
+        assert 'labels not in ("ac-generated", "ac-generation-failed", "regenerating")' in jql
 
 
 class TestPollingServicePollCycle:

@@ -29,6 +29,10 @@ build/
 .coverage
 htmlcov/
 
+# Data
+data/
+*.db
+
 # OS
 .DS_Store
 Thumbs.db

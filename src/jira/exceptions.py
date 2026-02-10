@@ -16,3 +16,16 @@ class JiraTicketNotFoundError(JiraError):
 
 class JiraIssueTypeNotSupportedError(JiraError):
     """Raised when ticket's issue type is not in configured list"""
+
+
+class EmptyDescriptionError(JiraError):
+    """Raised when a Jira ticket has no description"""
+
+    def __init__(self, ticket_key: str) -> None:
+        """Initialize the error with the ticket key.
+
+        Args:
+            ticket_key: The Jira ticket key that has no description.
+        """
+        self.ticket_key = ticket_key
+        super().__init__(f"Ticket {ticket_key} has no description")

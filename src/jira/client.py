@@ -520,3 +520,44 @@ class JiraClient:
                 str(e),
             )
             return False
+
+    async def remove_label(self, issue_key: str, label: str) -> bool:
+        """Remove a label from a Jira ticket.
+
+        This method does not raise exceptions - it returns False on any failure
+        and logs a warning for debugging purposes. It is safe to call even if
+        the label does not exist on the ticket.
+
+        Args:
+            issue_key: The ticket key (e.g., "IGAL-123").
+            label: The label to remove (e.g., "regenerating").
+
+        Returns:
+            True if successful, False if label removal failed.
+        """
+        try:
+            response = await self._client.put(
+                f"/rest/api/3/issue/{issue_key}",
+                json={"update": {"labels": [{"remove": label}]}},
+            )
+
+            if 200 <= response.status_code < 300:
+                return True
+
+            logger.warning(
+                "Failed to remove label '%s' from ticket %s: HTTP %d - %s",
+                label,
+                issue_key,
+                response.status_code,
+                response.text,
+            )
+            return False
+
+        except Exception as e:
+            logger.warning(
+                "Failed to remove label '%s' from ticket %s: %s",
+                label,
+                issue_key,
+                str(e),
+            )
+            return False

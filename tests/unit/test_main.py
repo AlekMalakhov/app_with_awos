@@ -52,7 +52,11 @@ class TestAppStartupSuccess:
 
             # Assert: Health check returns 200
             assert response.status_code == 200
-            assert response.json() == {"status": "healthy"}
+            data = response.json()
+            assert data["status"] == "healthy"
+            assert "slack_socket_mode" in data
+            assert "database" in data
+            assert "uptime_seconds" in data
 
             # Assert: JiraClient was properly initialized and validated
             mock_settings_class.assert_called_once()

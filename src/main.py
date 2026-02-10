@@ -1,19 +1,63 @@
 """FastAPI application entry point with Jira credential validation on startup."""
 
+import asyncio
 import logging
+import os
 import sys
+import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
+# Configure logging to show all module logs
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+# Set debug level for slack_bolt if DEBUG env var is set
+if os.environ.get("DEBUG"):
+    logging.getLogger("slack_bolt").setLevel(logging.DEBUG)
+    logging.getLogger("src.slack").setLevel(logging.DEBUG)
+
 from src.ai import ACGenerator, AISettings
+from src.database import ConversationRepository
 from src.jira.client import JiraClient
 from src.jira.config import JiraSettings
 from src.jira.exceptions import JiraAuthenticationError, JiraConnectionError
 from src.polling import PollingService
+from src.slack.config import SlackSettings
+from src.slack.events import slack_router
+from src.slack.socket_mode import SlackSocketModeService
 
 logger = logging.getLogger(__name__)
+
+CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
+
+
+async def _run_periodic_cleanup(repository: ConversationRepository) -> None:
+    """Run periodic cleanup of stale and abandoned conversations.
+
+    Executes every 24 hours, deleting conversations that are no longer
+    needed. Logs results and handles exceptions gracefully so that
+    cleanup failures never crash the application.
+
+    Args:
+        repository: ConversationRepository used to perform deletions.
+    """
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        try:
+            stale_count = repository.delete_stale()
+            abandoned_count = repository.delete_abandoned()
+            logger.info(
+                "Cleaned up %d stale and %d abandoned conversations",
+                stale_count,
+                abandoned_count,
+            )
+        except Exception:
+            logger.exception("Error during conversation cleanup")
 
 
 @asynccontextmanager
@@ -62,15 +106,46 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         polling_service = PollingService(jira_client, settings, ac_generator)
         await polling_service.start()
-        logger.info(f"Polling service started (interval: {settings.polling_interval_seconds}s)")
+        interval = settings.polling_interval_seconds
+        logger.info(f"Polling service started (interval: {interval}s)")
 
-    # Store client and polling service in app state for access in routes if needed
+    # Start Slack Socket Mode if enabled
+    socket_mode_service = None
+    try:
+        slack_settings = SlackSettings()
+        if slack_settings.socket_mode_enabled:
+            socket_mode_service = SlackSocketModeService(slack_settings)
+            await socket_mode_service.start()
+            logger.info("Slack Socket Mode service started")
+    except Exception as e:
+        logger.warning("Failed to start Slack Socket Mode: %s", e)
+        # Don't exit - Socket Mode is optional, HTTP endpoint still works
+
+    # Start background conversation cleanup task
+    conversation_repo = ConversationRepository()
+    cleanup_task = asyncio.create_task(_run_periodic_cleanup(conversation_repo))
+    logger.info("Conversation cleanup task started (interval: 24h)")
+
+    # Store client and services in app state for access in routes if needed
     app.state.jira_client = jira_client
     app.state.polling_service = polling_service
+    app.state.socket_mode_service = socket_mode_service
+    app.state.startup_time = time.monotonic()
 
     yield  # Application runs
 
     # Shutdown: cleanup
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    conversation_repo.close()
+    logger.info("Conversation cleanup task stopped")
+
+    if socket_mode_service:
+        await socket_mode_service.stop()
+        logger.info("Slack Socket Mode service stopped")
     if polling_service:
         await polling_service.stop()
         logger.info("Polling service stopped")
@@ -82,12 +157,58 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register routers
+app.include_router(slack_router, prefix="/slack")
+
 
 @app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint.
+async def health_check() -> dict[str, str | float]:
+    """Health check endpoint with component status reporting.
+
+    Checks the status of Socket Mode, database connectivity, and
+    reports application uptime. Returns an overall status of "healthy"
+    when all components are operational, or "degraded" when any
+    component reports an error or disconnected state.
 
     Returns:
-        Dictionary with status indicating the application is healthy.
+        Dictionary with overall status, component statuses, and uptime.
     """
-    return {"status": "healthy"}
+    # Check Socket Mode status
+    socket_mode_service = getattr(app.state, "socket_mode_service", None)
+    if socket_mode_service is None:
+        slack_socket_mode = "disabled"
+    elif socket_mode_service.is_running:
+        slack_socket_mode = "connected"
+    else:
+        slack_socket_mode = "disconnected"
+
+    # Check database connectivity
+    try:
+        repo = ConversationRepository()
+        try:
+            repo.get_by_id("health-check-ping")
+            database = "ok"
+        finally:
+            repo.close()
+    except Exception:
+        database = "error"
+
+    # Calculate uptime
+    startup_time = getattr(app.state, "startup_time", None)
+    if startup_time is not None:
+        uptime_seconds = round(time.monotonic() - startup_time, 2)
+    else:
+        uptime_seconds = 0.0
+
+    # Determine overall status
+    is_degraded = (
+        slack_socket_mode == "disconnected" or database == "error"
+    )
+    status = "degraded" if is_degraded else "healthy"
+
+    return {
+        "status": status,
+        "slack_socket_mode": slack_socket_mode,
+        "database": database,
+        "uptime_seconds": uptime_seconds,
+    }
