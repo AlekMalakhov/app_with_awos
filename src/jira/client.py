@@ -561,3 +561,68 @@ class JiraClient:
                 str(e),
             )
             return False
+
+    async def add_comment(self, issue_key: str, body: str) -> bool:
+        """Post a comment to a Jira ticket with Barley AI context.
+
+        Creates an ADF-formatted comment with a "Barley AI Context" heading
+        followed by the provided body text. This is a non-critical operation
+        and does not use retry logic.
+
+        This method does not raise exceptions - it returns False on any failure
+        and logs the error for debugging purposes.
+
+        Args:
+            issue_key: The ticket key (e.g., "IGAL-123").
+            body: The comment text to post under the "Barley AI Context" heading.
+
+        Returns:
+            True if successful, False if comment posting failed.
+        """
+        try:
+            payload = {
+                "body": {
+                    "version": 1,
+                    "type": "doc",
+                    "content": [
+                        {
+                            "type": "heading",
+                            "attrs": {"level": 3},
+                            "content": [
+                                {"type": "text", "text": "Barley AI Context"}
+                            ],
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": body}],
+                        },
+                    ],
+                }
+            }
+
+            response = await self._client.post(
+                f"/rest/api/3/issue/{issue_key}/comment",
+                json=payload,
+            )
+
+            if 200 <= response.status_code < 300:
+                logger.info(
+                    "Successfully added Barley AI Context comment to %s", issue_key
+                )
+                return True
+
+            logger.error(
+                "Failed to add comment to ticket %s: HTTP %d - %s",
+                issue_key,
+                response.status_code,
+                response.text,
+            )
+            return False
+
+        except Exception as e:
+            logger.error(
+                "Failed to add comment to ticket %s: %s",
+                issue_key,
+                str(e),
+            )
+            return False

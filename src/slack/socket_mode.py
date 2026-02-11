@@ -21,6 +21,9 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
 from src.ai import ACGenerator, AISettings
+from src.barley.client import BarleyClient
+from src.barley.config import BarleySettings
+from src.barley.service import BarleyEnrichmentService
 from src.database import ConversationRepository
 from src.jira import JiraClient, JiraSettings
 from src.slack.client import SlackClient
@@ -281,6 +284,7 @@ class SlackSocketModeService:
         repository = ConversationRepository()
         slack_client = SlackClient(self._settings)
         jira_client: JiraClient | None = None
+        barley_client: BarleyClient | None = None
 
         try:
             # Create Jira and AI dependencies for regeneration service
@@ -290,10 +294,25 @@ class SlackSocketModeService:
             jira_client = JiraClient(jira_settings)
             ac_generator = ACGenerator(ai_settings)
 
+            # Create Barley enrichment service if enabled
+            enrichment_service = None
+            try:
+                barley_settings = BarleySettings()
+                if barley_settings.enabled:
+                    barley_client = BarleyClient(settings=barley_settings)
+                    enrichment_service = BarleyEnrichmentService(
+                        barley_client=barley_client,
+                        ac_generator=ac_generator,
+                        settings=barley_settings,
+                    )
+            except Exception:
+                logger.debug("Barley enrichment not available for Socket Mode processing")
+
             regeneration_service = ACRegenerationService(
                 jira_client=jira_client,
                 ac_generator=ac_generator,
                 conversation_repository=repository,
+                enrichment_service=enrichment_service,
             )
 
             intent_classifier = IntentClassifier(ai_settings)
@@ -320,6 +339,8 @@ class SlackSocketModeService:
             return None
         finally:
             await slack_client.close()
+            if barley_client is not None:
+                await barley_client.close()
             if jira_client is not None:
                 await jira_client.close()
             repository.close()

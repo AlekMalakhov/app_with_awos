@@ -1448,3 +1448,211 @@ class TestPollingServiceACGeneratorIntegration:
         )
 
         assert service._ac_generator is None
+
+
+class TestPollingServiceBarleyEnrichment:
+    """Test suite for PollingService integration with BarleyEnrichmentService."""
+
+    @pytest.fixture
+    def mock_jira_client(self) -> MagicMock:
+        """Create a mock JiraClient for Barley enrichment tests."""
+        return MagicMock(spec=JiraClient)
+
+    @pytest.fixture
+    def mock_jira_settings(self) -> JiraSettings:
+        """Create mock JiraSettings for Barley enrichment tests."""
+        return JiraSettings(
+            base_url="https://test.atlassian.net",
+            user_email="test@example.com",
+            api_token="test-api-token",
+            project_key="TEST",
+            polling_enabled=True,
+            polling_interval_seconds=1,
+            polling_lookback_days=7,
+            polling_max_failures=3,
+        )
+
+    @pytest.fixture
+    def mock_ac_generator(self) -> MagicMock:
+        """Create a mock ACGenerator for Barley enrichment tests."""
+        mock = MagicMock()
+        mock.is_enabled = True
+        mock.generate = AsyncMock(
+            return_value=[
+                "User can perform the described action",
+                "System responds within acceptable time limits",
+                "Error states are handled gracefully",
+            ]
+        )
+        return mock
+
+    @pytest.fixture
+    def mock_enrichment_service(self) -> MagicMock:
+        """Create a mock BarleyEnrichmentService."""
+        from src.barley.models import EnrichmentResult
+
+        mock = MagicMock()
+        mock.enrich = AsyncMock(
+            return_value=EnrichmentResult(
+                barley_context="Project uses React for the frontend and Python FastAPI for the backend.",
+                topics_extracted="React, FastAPI, frontend, backend",
+            )
+        )
+        return mock
+
+    @pytest.fixture
+    def valid_ticket(self) -> TicketData:
+        """Create a valid ticket that passes prerequisite checks."""
+        return TicketData(
+            key="TEST-500",
+            summary="Valid ticket for Barley enrichment tests",
+            description="As a user, I want to integrate Barley context into AC generation.",
+            issue_type="Story",
+        )
+
+    @pytest.mark.asyncio
+    async def test_enrichment_applied_passes_enriched_description_to_generate(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        mock_enrichment_service: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify enriched description is passed to ACGenerator.generate() when context available."""
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.add_comment = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            enrichment_service=mock_enrichment_service,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Verify enrich was called with the ticket's summary and description
+        mock_enrichment_service.enrich.assert_called_once_with(
+            summary=valid_ticket.summary,
+            description=valid_ticket.description,
+        )
+
+        # Verify generate() received the enriched description (with Barley context appended)
+        generate_call_kwargs = mock_ac_generator.generate.call_args[1]
+        assert "Additional Context from Barley:" in generate_call_kwargs["description"]
+        assert "Project uses React for the frontend" in generate_call_kwargs["description"]
+
+        # Verify add_comment was called with the Barley context
+        mock_jira_client.add_comment.assert_called_once_with(
+            valid_ticket.key,
+            "Project uses React for the frontend and Python FastAPI for the backend.",
+        )
+
+    @pytest.mark.asyncio
+    async def test_enrichment_no_context_passes_original_description(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        mock_enrichment_service: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify original description is passed to generate() when barley_context is None."""
+        from src.barley.models import EnrichmentResult
+
+        mock_enrichment_service.enrich = AsyncMock(
+            return_value=EnrichmentResult(
+                barley_context=None,
+                topics_extracted="some topics",
+            )
+        )
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            enrichment_service=mock_enrichment_service,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Verify generate() received the original description (no enrichment)
+        generate_call_kwargs = mock_ac_generator.generate.call_args[1]
+        assert generate_call_kwargs["description"] == valid_ticket.description
+
+        # Verify add_comment was NOT called (no context to post)
+        mock_jira_client.add_comment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_enrichment_service_uses_original_description(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify original description is used when enrichment_service is None."""
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            enrichment_service=None,  # No enrichment service
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Verify generate() received the original description
+        generate_call_kwargs = mock_ac_generator.generate.call_args[1]
+        assert generate_call_kwargs["description"] == valid_ticket.description
+
+    @pytest.mark.asyncio
+    async def test_enrichment_exception_continues_with_original_description(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_ac_generator: MagicMock,
+        mock_enrichment_service: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify _process_ticket() continues with original description when enrichment raises."""
+        mock_enrichment_service.enrich = AsyncMock(
+            side_effect=RuntimeError("Barley API crashed")
+        )
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            enrichment_service=mock_enrichment_service,
+        )
+
+        # Should NOT raise - enrichment failure is caught and processing continues
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Verify generate() received the original description (not enriched)
+        generate_call_kwargs = mock_ac_generator.generate.call_args[1]
+        assert generate_call_kwargs["description"] == valid_ticket.description
+
+        # Verify add_comment was NOT called (enrichment failed)
+        mock_jira_client.add_comment.assert_not_called()

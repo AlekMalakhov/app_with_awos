@@ -43,6 +43,45 @@ AC_TOOL = {
     },
 }
 
+TOPICS_TOOL = {
+    "name": "submit_extracted_topics",
+    "description": (
+        "Submit the extracted topics, entities, and domain concepts "
+        "from a Jira ticket"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "topics": {
+                "type": "string",
+                "description": (
+                    "A consolidated natural-language summary of the key topics, "
+                    "entities, domain concepts, and business terms found in the "
+                    "ticket. Should read as a coherent passage, not a keyword list."
+                ),
+            },
+        },
+        "required": ["topics"],
+    },
+}
+
+TOPICS_SYSTEM_PROMPT = """\
+You are an expert at analyzing software development tickets and extracting \
+their core subject matter.
+
+Your task is to read a Jira ticket's summary and description, then extract \
+the key topics, entities, domain concepts, and business terms.
+
+GUIDELINES:
+- Identify the primary domain area (e.g., payments, authentication, reporting)
+- Extract named entities such as systems, services, APIs, or integrations
+- Capture business terms and domain-specific language
+- Note any technical concepts, frameworks, or tools mentioned
+- Return a consolidated natural-language summary that provides rich context \
+about what this ticket is about — NOT a list of keywords
+
+Use the submit_extracted_topics tool to provide your response."""
+
 SYSTEM_PROMPT = """\
 You are an expert Product Owner writing acceptance criteria for software \
 development tickets.
@@ -170,6 +209,90 @@ submit_acceptance_criteria tool."""
                 return acs
 
         logger.error("No tool_use block found in AI response")
+        raise AIInvalidResponseError(
+            "Response did not contain expected tool_use block"
+        )
+
+    async def extract_topics(self, summary: str, description: str) -> str:
+        """Extract key topics and domain concepts from a Jira ticket.
+
+        Uses Claude to analyze the ticket summary and description, extracting
+        core topics, entities, and business terms as a consolidated
+        natural-language string suitable for downstream processing.
+
+        Args:
+            summary: Ticket summary/title
+            description: Ticket description text
+
+        Returns:
+            Consolidated string of extracted topics on success,
+            raw description as fallback on any failure,
+            or empty string if description is empty.
+        """
+        if not description:
+            return ""
+
+        if not self.is_enabled:
+            logger.warning(
+                "ACGenerator is disabled (no API key configured), "
+                "returning raw description as fallback"
+            )
+            return description
+
+        user_message = f"""TICKET SUMMARY: {summary}
+
+TICKET DESCRIPTION:
+{description}
+
+Analyze this ticket and extract the key topics using the \
+submit_extracted_topics tool."""
+
+        try:
+            response = self._client.messages.create(
+                model=self._settings.ai_model,
+                max_tokens=self._settings.ai_max_tokens,
+                system=TOPICS_SYSTEM_PROMPT,
+                tools=[TOPICS_TOOL],
+                tool_choice={"type": "tool", "name": "submit_extracted_topics"},
+                messages=[{"role": "user", "content": user_message}],
+            )
+
+            return self._parse_topics_response(response)
+
+        except Exception as e:
+            logger.warning(
+                "Failed to extract topics, returning raw description: %s", e
+            )
+            return description
+
+    def _parse_topics_response(self, response) -> str:
+        """Parse the tool_use response and extract topics string.
+
+        Args:
+            response: Anthropic API response object
+
+        Returns:
+            Extracted topics string
+
+        Raises:
+            AIInvalidResponseError: When response does not contain expected
+                tool_use block
+        """
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "submit_extracted_topics":
+                tool_input = block.input
+                topics = tool_input.get("topics", "")
+
+                if not topics:
+                    logger.warning("AI returned empty topics string")
+                    raise AIInvalidResponseError(
+                        "AI returned empty topics string"
+                    )
+
+                logger.info("AI extracted topics successfully")
+                return topics
+
+        logger.error("No tool_use block found in AI response for topic extraction")
         raise AIInvalidResponseError(
             "Response did not contain expected tool_use block"
         )

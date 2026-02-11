@@ -22,6 +22,9 @@ if os.environ.get("DEBUG"):
     logging.getLogger("src.slack").setLevel(logging.DEBUG)
 
 from src.ai import ACGenerator, AISettings
+from src.barley.client import BarleyClient
+from src.barley.config import BarleySettings
+from src.barley.service import BarleyEnrichmentService
 from src.database import ConversationRepository
 from src.jira.client import JiraClient
 from src.jira.config import JiraSettings
@@ -97,6 +100,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.warning("AI generation disabled (ANTHROPIC_API_KEY not set)")
 
+    # Create Barley enrichment service if enabled
+    barley_client = None
+    enrichment_service = None
+    try:
+        barley_settings = BarleySettings()
+        if barley_settings.enabled:
+            barley_client = BarleyClient(settings=barley_settings)
+            enrichment_service = BarleyEnrichmentService(
+                barley_client=barley_client,
+                ac_generator=ac_generator,
+                settings=barley_settings,
+            )
+            logger.info("Barley enrichment enabled")
+        else:
+            logger.info("Barley enrichment disabled")
+    except Exception:
+        logger.info("Barley enrichment disabled")
+
     # Start polling service if enabled
     polling_service = None
     if settings.polling_enabled:
@@ -104,7 +125,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error("JIRA_PROJECT_KEY required when polling is enabled")
             sys.exit(1)
 
-        polling_service = PollingService(jira_client, settings, ac_generator)
+        polling_service = PollingService(
+            jira_client, settings, ac_generator, enrichment_service
+        )
         await polling_service.start()
         interval = settings.polling_interval_seconds
         logger.info(f"Polling service started (interval: {interval}s)")
@@ -149,6 +172,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if polling_service:
         await polling_service.stop()
         logger.info("Polling service stopped")
+    if barley_client:
+        await barley_client.close()
+        logger.info("Barley client closed")
     await jira_client.close()
 
 

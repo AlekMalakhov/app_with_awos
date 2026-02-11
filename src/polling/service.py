@@ -12,6 +12,7 @@ from src.jira.ac_formatter import append_acs_to_description, validate_acs
 
 if TYPE_CHECKING:
     from src.ai import ACGenerator
+    from src.barley.service import BarleyEnrichmentService
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class PollingService:
         jira_client: JiraClient,
         settings: JiraSettings,
         ac_generator: ACGenerator | None = None,
+        enrichment_service: BarleyEnrichmentService | None = None,
     ) -> None:
         """Initialize the polling service.
 
@@ -35,10 +37,13 @@ class PollingService:
             jira_client: JiraClient instance for API operations.
             settings: JiraSettings containing polling configuration.
             ac_generator: Optional ACGenerator for AI-powered AC generation.
+            enrichment_service: Optional BarleyEnrichmentService for enriching
+                ticket descriptions with project context before AC generation.
         """
         self._client = jira_client
         self._settings = settings
         self._ac_generator = ac_generator
+        self._enrichment_service = enrichment_service
         self._failure_counts: dict[str, int] = {}  # In-memory failure tracking
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -190,6 +195,42 @@ class PollingService:
             logger.info("Skipping %s: already has acceptance criteria", ticket.key)
             return False
 
+        # Enrich description with Barley project context (if available)
+        enriched_description = ticket.description
+        if self._enrichment_service is not None:
+            try:
+                enrichment_result = await self._enrichment_service.enrich(
+                    summary=ticket.summary,
+                    description=ticket.description,
+                )
+                if enrichment_result.barley_context is not None:
+                    enriched_description = (
+                        f"{ticket.description}\n\n"
+                        f"Additional Context from Barley:\n"
+                        f"{enrichment_result.barley_context}"
+                    )
+                    logger.info(
+                        "Barley enrichment applied for %s", ticket.key
+                    )
+                    logger.debug(
+                        "Barley context for %s: %s",
+                        ticket.key,
+                        enrichment_result.barley_context,
+                    )
+                    await self._client.add_comment(
+                        ticket.key, enrichment_result.barley_context
+                    )
+                else:
+                    logger.debug(
+                        "Barley enrichment returned no context for %s",
+                        ticket.key,
+                    )
+            except Exception:
+                logger.exception(
+                    "Barley enrichment failed for %s, proceeding without context",
+                    ticket.key,
+                )
+
         # 1. Generate ACs using AI
         if self._ac_generator is None or not self._ac_generator.is_enabled:
             logger.warning("AI generation disabled, skipping %s", ticket.key)
@@ -197,7 +238,7 @@ class PollingService:
 
         generated_acs = await self._ac_generator.generate(
             summary=ticket.summary,
-            description=ticket.description,
+            description=enriched_description,
         )
 
         if not generated_acs:

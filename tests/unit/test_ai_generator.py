@@ -462,3 +462,127 @@ class TestACGeneratorIntegration:
             )
 
             assert result == []
+
+
+def create_mock_topics_tool_use_response(topics: str) -> MagicMock:
+    """Create a mock Anthropic API response with submit_extracted_topics tool_use block.
+
+    Args:
+        topics: The extracted topics string
+
+    Returns:
+        Mock response object matching Anthropic API structure
+    """
+    tool_use_block = MagicMock()
+    tool_use_block.type = "tool_use"
+    tool_use_block.name = "submit_extracted_topics"
+    tool_use_block.input = {"topics": topics}
+
+    response = MagicMock()
+    response.content = [tool_use_block]
+
+    return response
+
+
+class TestACGeneratorExtractTopics:
+    """Test suite for ACGenerator.extract_topics() method."""
+
+    @pytest.mark.asyncio
+    async def test_extract_topics_returns_topics_on_successful_extraction(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test extract_topics() returns extracted topics from valid tool_use response."""
+        expected_topics = (
+            "This ticket covers user authentication in the payments domain, "
+            "involving the Stripe API integration and OAuth2 token refresh flow."
+        )
+
+        mock_response = create_mock_topics_tool_use_response(topics=expected_topics)
+
+        with patch("src.ai.generator.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = mock_response
+            mock_anthropic.return_value = mock_client
+
+            generator = ACGenerator(ai_settings_enabled)
+            result = await generator.extract_topics(
+                summary="Fix Stripe OAuth token refresh",
+                description="The payment service fails when the OAuth2 token expires.",
+            )
+
+            assert result == expected_topics
+            mock_client.messages.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_extract_topics_returns_raw_description_on_api_exception(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test extract_topics() falls back to raw description when API raises."""
+        raw_description = "The payment service fails when the OAuth2 token expires."
+
+        with patch("src.ai.generator.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.side_effect = Exception("API connection failed")
+            mock_anthropic.return_value = mock_client
+
+            generator = ACGenerator(ai_settings_enabled)
+            result = await generator.extract_topics(
+                summary="Fix Stripe OAuth token refresh",
+                description=raw_description,
+            )
+
+            assert result == raw_description
+
+    @pytest.mark.asyncio
+    async def test_extract_topics_returns_empty_string_for_empty_description(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test extract_topics() returns empty string when description is empty."""
+        with patch("src.ai.generator.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.return_value = mock_client
+
+            generator = ACGenerator(ai_settings_enabled)
+            result = await generator.extract_topics(
+                summary="Some summary",
+                description="",
+            )
+
+            assert result == ""
+            mock_client.messages.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_extract_topics_returns_raw_description_on_invalid_response(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test extract_topics() falls back to raw description when response has no tool_use block."""
+        raw_description = "Users need single sign-on via SAML for enterprise clients."
+        mock_response = create_mock_text_response()
+
+        with patch("src.ai.generator.Anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_client.messages.create.return_value = mock_response
+            mock_anthropic.return_value = mock_client
+
+            generator = ACGenerator(ai_settings_enabled)
+            result = await generator.extract_topics(
+                summary="Implement SAML SSO",
+                description=raw_description,
+            )
+
+            assert result == raw_description
+
+    @pytest.mark.asyncio
+    async def test_extract_topics_returns_raw_description_when_disabled(
+        self, ai_settings_disabled: AISettings
+    ):
+        """Test extract_topics() returns raw description without API call when disabled."""
+        raw_description = "Users need single sign-on via SAML for enterprise clients."
+
+        generator = ACGenerator(ai_settings_disabled)
+        result = await generator.extract_topics(
+            summary="Implement SAML SSO",
+            description=raw_description,
+        )
+
+        assert result == raw_description

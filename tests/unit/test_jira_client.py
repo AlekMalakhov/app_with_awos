@@ -1,5 +1,6 @@
-"""Unit tests for JiraClient connection validation."""
+"""Unit tests for JiraClient connection validation and API operations."""
 
+import json
 from unittest.mock import patch
 
 import httpx
@@ -1163,5 +1164,150 @@ class TestJiraClientUpdateDescription:
             assert "fields" in payload
             assert "description" in payload["fields"]
             assert payload["fields"]["description"] == sample_adf
+        finally:
+            await client.close()
+
+
+class TestJiraClientAddComment:
+    """Test suite for JiraClient.add_comment() method."""
+
+    @pytest.mark.asyncio
+    async def test_add_comment_success_returns_true(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings
+    ):
+        """Test that add_comment returns True on HTTP 201 response."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123/comment",
+            method="POST",
+            status_code=201,
+            json={"id": "10001"},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.add_comment("PROJ-123", "Some Barley context")
+
+            assert result is True
+
+            # Verify the request was made to the correct endpoint
+            requests = httpx_mock.get_requests()
+            assert len(requests) == 1
+            assert requests[0].method == "POST"
+            assert requests[0].url.path == "/rest/api/3/issue/PROJ-123/comment"
+
+            # Verify the payload contains the ADF body with the correct text
+            payload = json.loads(requests[0].content)
+            assert "body" in payload
+            assert payload["body"]["type"] == "doc"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_add_comment_payload_contains_barley_heading(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings
+    ):
+        """Test that the ADF payload contains the 'Barley AI Context' heading."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123/comment",
+            method="POST",
+            status_code=201,
+            json={"id": "10002"},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            await client.add_comment("PROJ-123", "Project uses React and TypeScript")
+
+            requests = httpx_mock.get_requests()
+            payload = json.loads(requests[0].content)
+
+            # Verify the ADF structure contains a heading with "Barley AI Context"
+            content_blocks = payload["body"]["content"]
+            heading_block = content_blocks[0]
+            assert heading_block["type"] == "heading"
+            assert heading_block["content"][0]["text"] == "Barley AI Context"
+
+            # Verify the paragraph block contains the body text
+            paragraph_block = content_blocks[1]
+            assert paragraph_block["type"] == "paragraph"
+            assert paragraph_block["content"][0]["text"] == "Project uses React and TypeScript"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_add_comment_failure_http_400_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings
+    ):
+        """Test that add_comment returns False when API returns 400 Bad Request."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123/comment",
+            method="POST",
+            status_code=400,
+            json={"errorMessages": ["Invalid request"]},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.add_comment("PROJ-123", "Some context")
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_add_comment_failure_http_500_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings
+    ):
+        """Test that add_comment returns False when API returns 500 Server Error."""
+        httpx_mock.add_response(
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123/comment",
+            method="POST",
+            status_code=500,
+            json={"message": "Internal Server Error"},
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.add_comment("PROJ-123", "Some context")
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_add_comment_network_error_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings
+    ):
+        """Test that add_comment returns False when httpx raises a connection error."""
+        httpx_mock.add_exception(
+            httpx.ConnectError("Connection refused"),
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123/comment",
+            method="POST",
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.add_comment("PROJ-123", "Some context")
+
+            assert result is False
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_add_comment_timeout_returns_false(
+        self, httpx_mock: HTTPXMock, jira_settings: JiraSettings
+    ):
+        """Test that add_comment returns False when httpx raises a timeout."""
+        httpx_mock.add_exception(
+            httpx.TimeoutException("Request timed out"),
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123/comment",
+            method="POST",
+        )
+
+        client = JiraClient(jira_settings)
+        try:
+            result = await client.add_comment("PROJ-123", "Some context")
+
+            assert result is False
         finally:
             await client.close()

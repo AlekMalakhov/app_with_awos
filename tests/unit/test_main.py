@@ -454,7 +454,7 @@ class TestPollingServiceIntegration:
         with TestClient(app):
             # Assert: PollingService was instantiated with ac_generator and started
             mock_polling_class.assert_called_once_with(
-                mock_client, mock_settings, mock_ac_generator
+                mock_client, mock_settings, mock_ac_generator, None
             )
             mock_polling_service.start.assert_called_once()
 

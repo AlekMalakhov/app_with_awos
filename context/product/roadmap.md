@@ -23,9 +23,9 @@ _The foundational integration layer — connecting to Jira and generating basic 
 
 _Intelligence layer — enriching context when descriptions lack detail._
 
-- [ ] **Barley AI Consultation**
-  - [ ] **Barley API Integration:** Connect to Barley's API to query for additional context when ticket descriptions are insufficient.
-  - [ ] **Context Enrichment Logic:** Define rules for when to escalate to Barley (e.g., missing user stories, unclear scope).
+- [x] **Barley AI Consultation**
+  - [x] **Barley API Integration:** Connect to Barley's API to query for additional context when ticket descriptions are insufficient.
+  - [x] **Context Enrichment Logic:** Define rules for when to escalate to Barley (e.g., missing user stories, unclear scope).
 
 - [ ] **Slack Integration Foundation**
   - [ ] **Slack API Connection:** Establish secure connection to send direct messages via Slack.

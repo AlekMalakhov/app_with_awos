@@ -21,6 +21,7 @@ from src.jira import (
 
 if TYPE_CHECKING:
     from src.ai import ACGenerator
+    from src.barley.service import BarleyEnrichmentService
 
 # Type alias for an async callback that receives a status message string.
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -41,6 +42,7 @@ class ACRegenerationService:
         jira_client: JiraClient,
         ac_generator: ACGenerator,
         conversation_repository: ConversationRepository,
+        enrichment_service: BarleyEnrichmentService | None = None,
     ) -> None:
         """Initialize the AC regeneration service.
 
@@ -48,10 +50,13 @@ class ACRegenerationService:
             jira_client: Client for fetching ticket data from Jira.
             ac_generator: AI-powered acceptance criteria generator.
             conversation_repository: Repository for persisting conversation state.
+            enrichment_service: Optional BarleyEnrichmentService for enriching
+                ticket descriptions with project context before AC generation.
         """
         self._jira_client = jira_client
         self._ac_generator = ac_generator
         self._repository = conversation_repository
+        self._enrichment_service = enrichment_service
 
     async def start_regeneration(
         self,
@@ -117,10 +122,46 @@ class ACRegenerationService:
             if on_progress is not None:
                 await on_progress("Generating new acceptance criteria...")
 
+            # Enrich description with Barley project context (if available)
+            enriched_description = ticket.description
+            if self._enrichment_service is not None:
+                try:
+                    enrichment_result = await self._enrichment_service.enrich(
+                        summary=ticket.summary,
+                        description=ticket.description,
+                    )
+                    if enrichment_result.barley_context is not None:
+                        enriched_description = (
+                            f"{ticket.description}\n\n"
+                            f"Additional Context from Barley:\n"
+                            f"{enrichment_result.barley_context}"
+                        )
+                        logger.info(
+                            "Barley enrichment applied for %s", ticket_key
+                        )
+                        logger.debug(
+                            "Barley context for %s: %s",
+                            ticket_key,
+                            enrichment_result.barley_context,
+                        )
+                        await self._jira_client.add_comment(
+                            ticket_key, enrichment_result.barley_context
+                        )
+                    else:
+                        logger.debug(
+                            "Barley enrichment returned no context for %s",
+                            ticket_key,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Barley enrichment failed for %s, proceeding without context",
+                        ticket_key,
+                    )
+
             # Step 4: Generate new ACs via ACGenerator
             proposed_acs = await self._ac_generator.generate(
                 summary=ticket.summary,
-                description=ticket.description,
+                description=enriched_description,
             )
             logger.info(
                 "Generated %d proposed ACs for ticket %s",
