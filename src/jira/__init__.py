@@ -1,6 +1,7 @@
 """Jira module - provides Jira API integration components."""
 
 from src.jira.ac_extractor import (
+    extract_acs_from_adf,
     extract_acs_from_description,
     replace_acs_in_adf,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "format_acs_to_adf",
     "append_acs_to_description",
     "build_attribution_node",
+    "extract_acs_from_adf",
     "extract_acs_from_description",
     "replace_acs_in_adf",
 ]

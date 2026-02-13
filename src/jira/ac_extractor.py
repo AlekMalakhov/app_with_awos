@@ -72,6 +72,49 @@ def extract_acs_from_description(description: str) -> list[str]:
     return criteria
 
 
+def extract_acs_from_adf(description_adf: dict | None) -> list[str]:
+    """Extract acceptance criteria directly from an ADF document structure.
+
+    Locates the AC section by heading, then extracts text from taskList
+    and bulletList items. Handles both tool-generated ACs (taskList format)
+    and manually-written ACs (bulletList format).
+
+    Args:
+        description_adf: The description in Atlassian Document Format, or None.
+
+    Returns:
+        List of criterion strings extracted from list items in the AC section.
+        Returns empty list if no AC section found or input is None.
+    """
+    if not description_adf or not isinstance(description_adf, dict):
+        return []
+
+    content = description_adf.get("content", [])
+    if not isinstance(content, list) or not content:
+        return []
+
+    start_idx, end_idx = _find_ac_section_indices(content)
+    if start_idx is None or end_idx is None:
+        logger.debug("No Acceptance Criteria section found in ADF")
+        return []
+
+    criteria: list[str] = []
+
+    for node in content[start_idx + 1 : end_idx]:
+        node_type = node.get("type", "")
+
+        if node_type in ("taskList", "bulletList", "orderedList"):
+            for item in node.get("content", []):
+                item_text = _extract_text_from_node(item).strip()
+                # Remove leading checkbox markers from manual Jira ACs
+                if item_text.startswith(("[ ] ", "[x] ", "[X] ")):
+                    item_text = item_text[4:]
+                if item_text:
+                    criteria.append(item_text)
+
+    return criteria
+
+
 def _find_ac_section_indices(content: list[dict]) -> tuple[int | None, int | None]:
     """Find the start and end indices of the AC section in ADF content.
 

@@ -15,7 +15,7 @@ from src.database import ConversationRepository, ConversationState, Conversation
 from src.jira import (
     EmptyDescriptionError,
     JiraClient,
-    extract_acs_from_description,
+    extract_acs_from_adf,
     replace_acs_in_adf,
 )
 
@@ -102,8 +102,9 @@ class ACRegenerationService:
                 logger.warning("Ticket %s has no description", ticket_key)
                 raise EmptyDescriptionError(ticket_key)
 
-            # Step 2: Extract existing ACs from ticket description
-            existing_acs = extract_acs_from_description(ticket.description)
+            # Step 2: Extract existing ACs from ADF structure (handles both
+            # tool-generated taskList and manually-written bulletList formats)
+            existing_acs = extract_acs_from_adf(ticket.description_adf)
             logger.debug(
                 "Extracted %d existing ACs from ticket %s",
                 len(existing_acs),
@@ -159,10 +160,11 @@ class ACRegenerationService:
                     )
 
             # Step 4: Generate new ACs via ACGenerator
-            proposed_acs = await self._ac_generator.generate(
+            result = await self._ac_generator.generate(
                 summary=ticket.summary,
                 description=enriched_description,
             )
+            proposed_acs = result.acceptance_criteria
             logger.info(
                 "Generated %d proposed ACs for ticket %s",
                 len(proposed_acs),
@@ -336,10 +338,11 @@ User feedback: {feedback}
 Please generate updated acceptance criteria that address the user's feedback."""
 
         # Step 3: Call ACGenerator.generate() with enhanced context
-        proposed_acs = await self._ac_generator.generate(
+        result = await self._ac_generator.generate(
             summary=ticket.summary,
             description=enhanced_description,
         )
+        proposed_acs = result.acceptance_criteria
         logger.info(
             "Generated %d new proposed ACs for conversation %s",
             len(proposed_acs),

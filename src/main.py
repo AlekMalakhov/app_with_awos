@@ -26,17 +26,48 @@ from src.barley.client import BarleyClient
 from src.barley.config import BarleySettings
 from src.barley.service import BarleyEnrichmentService
 from src.database import ConversationRepository
+from src.database.repository import EscalationRepository
 from src.jira.client import JiraClient
 from src.jira.config import JiraSettings
 from src.jira.exceptions import JiraAuthenticationError, JiraConnectionError
 from src.polling import PollingService
+from src.slack.client import SlackClient
 from src.slack.config import SlackSettings
 from src.slack.events import slack_router
+from src.slack.services import SlackEscalationService
 from src.slack.socket_mode import SlackSocketModeService
 
 logger = logging.getLogger(__name__)
 
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
+
+
+async def _resolve_bot_user_id(bot_token: str) -> str | None:
+    """Resolve the bot's own Slack user ID via auth.test.
+
+    Args:
+        bot_token: The Slack bot OAuth token.
+
+    Returns:
+        The bot's user ID string, or None if resolution fails.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://slack.com/api/auth.test",
+                headers={"Authorization": f"Bearer {bot_token}"},
+            )
+            data = resp.json()
+            if data.get("ok"):
+                user_id = data["user_id"]
+                logger.info("Resolved bot user ID: %s", user_id)
+                return user_id
+            logger.warning("auth.test failed: %s", data.get("error"))
+    except Exception:
+        logger.warning("Failed to resolve bot user ID", exc_info=True)
+    return None
 
 
 async def _run_periodic_cleanup(repository: ConversationRepository) -> None:
@@ -118,6 +149,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         logger.info("Barley enrichment disabled")
 
+    # Initialize Slack escalation service if configured
+    slack_settings = None
+    slack_client = None
+    slack_escalation_service = None
+    escalation_repository = None
+    try:
+        slack_settings = SlackSettings()
+        if slack_settings.escalation_contact_email:
+            slack_client = SlackClient(slack_settings)
+            slack_escalation_service = SlackEscalationService(
+                slack_client, slack_settings
+            )
+            escalation_repository = EscalationRepository()
+            logger.info("Slack escalation service initialized")
+    except Exception as e:
+        logger.warning("Slack escalation service not available: %s", e)
+
     # Start polling service if enabled
     polling_service = None
     if settings.polling_enabled:
@@ -126,7 +174,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             sys.exit(1)
 
         polling_service = PollingService(
-            jira_client, settings, ac_generator, enrichment_service
+            jira_client,
+            settings,
+            ac_generator,
+            enrichment_service,
+            escalation_service=slack_escalation_service,
+            escalation_repository=escalation_repository,
+            confidence_threshold=slack_settings.confidence_threshold
+            if slack_settings
+            else 0.7,
         )
         await polling_service.start()
         interval = settings.polling_interval_seconds
@@ -135,9 +191,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Start Slack Socket Mode if enabled
     socket_mode_service = None
     try:
-        slack_settings = SlackSettings()
+        if slack_settings is None:
+            slack_settings = SlackSettings()
         if slack_settings.socket_mode_enabled:
-            socket_mode_service = SlackSocketModeService(slack_settings)
+            # Resolve bot's own user ID to filter self-messages
+            bot_user_id = await _resolve_bot_user_id(slack_settings.bot_token)
+            socket_mode_service = SlackSocketModeService(
+                slack_settings, bot_user_id=bot_user_id
+            )
             await socket_mode_service.start()
             logger.info("Slack Socket Mode service started")
     except Exception as e:
@@ -172,6 +233,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if polling_service:
         await polling_service.stop()
         logger.info("Polling service stopped")
+    if escalation_repository:
+        escalation_repository.close()
+        logger.info("Escalation repository closed")
+    if slack_client:
+        await slack_client.close()
+        logger.info("Slack client closed")
     if barley_client:
         await barley_client.close()
         logger.info("Barley client closed")

@@ -21,6 +21,20 @@ class SlackMessageResponse(BaseModel):
     ts: str | None = None
 
 
+class EscalationResult(BaseModel):
+    """Result of an escalation attempt by the SlackEscalationService.
+
+    Attributes:
+        sent: Whether the DM was successfully sent.
+        slack_user_id: Resolved Slack user ID (if found).
+        error: Error description if sending failed.
+    """
+
+    sent: bool
+    slack_user_id: str | None = None
+    error: str | None = None
+
+
 class SlackEvent(BaseModel):
     """Model for a Slack event object within an event_callback payload.
 

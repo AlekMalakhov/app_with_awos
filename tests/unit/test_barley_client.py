@@ -22,6 +22,7 @@ def barley_settings() -> BarleySettings:
         api_url="https://barley.test.example.com",
         api_token="test-barley-token-12345",
         timeout=30,
+        max_retries=0,
     )
 
 
@@ -361,8 +362,8 @@ class TestBarleyClientRequestPayload:
             assert len(requests) == 1
 
             payload = json.loads(requests[0].content)
-            assert payload["temperature"] == 0.7
-            assert payload["max_tokens"] == 3000
+            assert payload["temperature"] == 0.3
+            assert payload["max_tokens"] == 1500
         finally:
             await client.close()
 

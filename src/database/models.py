@@ -82,6 +82,31 @@ class ConversationState(BaseModel):
     proposed_acs: list[str] | None = None
     description_adf: dict | None = None
     error_message: str | None = None
+    slack_thread_ts: str | None = None
     message_history: list[MessageRecord] = Field(default_factory=list)
     created_at: str = Field(default_factory=_utc_now_iso)
     updated_at: str = Field(default_factory=_utc_now_iso)
+
+
+class EscalationRecord(BaseModel):
+    """Record of an escalation triggered by low-confidence AC generation.
+
+    Attributes:
+        id: UUID identifier for the escalation.
+        jira_ticket_key: The Jira ticket key (e.g., "PROJ-123").
+        confidence_score: Confidence score between 0.0 and 1.0.
+        confidence_gaps: List of identified gap descriptions.
+        slack_user_id: Resolved Slack user ID, or None if unresolved.
+        status: Escalation status ("SENT" or "FAILED").
+        error_message: Error details if status is FAILED.
+        created_at: ISO 8601 timestamp of when the escalation was created.
+    """
+
+    id: str
+    jira_ticket_key: str
+    confidence_score: float
+    confidence_gaps: list[str]
+    slack_user_id: str | None = None
+    status: str
+    error_message: str | None = None
+    created_at: str = Field(default_factory=_utc_now_iso)

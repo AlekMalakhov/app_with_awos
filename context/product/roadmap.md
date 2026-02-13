@@ -8,11 +8,11 @@ _This roadmap outlines our strategic direction based on customer needs and busin
 
 _The foundational integration layer — connecting to Jira and generating basic ACs._
 
-- [ ] **Jira Integration Foundation**
+- [x] **Jira Integration Foundation**
   - [x] **Jira API Connection:** Establish secure connection to read ticket descriptions from Stories and Tasks.
   - [x] **Write ACs Back to Jira:** Enable writing generated acceptance criteria to the ticket's AC field.
 
-- [ ] **Core AC Generation**
+- [x] **Core AC Generation**
   - [x] **AI-Powered AC Generation:** Parse ticket descriptions and generate structured, actionable acceptance criteria using AI.
   - [x] **Automatic Trigger on Ticket Creation:** Automatically invoke AC generation when a new Story/Task is created.
   - [x] **Manual Re-Trigger Capability:** Allow users to manually request AC regeneration on demand.
@@ -27,9 +27,9 @@ _Intelligence layer — enriching context when descriptions lack detail._
   - [x] **Barley API Integration:** Connect to Barley's API to query for additional context when ticket descriptions are insufficient.
   - [x] **Context Enrichment Logic:** Define rules for when to escalate to Barley (e.g., missing user stories, unclear scope).
 
-- [ ] **Slack Integration Foundation**
-  - [ ] **Slack API Connection:** Establish secure connection to send direct messages via Slack.
-  - [ ] **PO/DM Escalation via DM:** When Barley cannot provide enough information, send a Slack DM to the Product Owner or Delivery Manager requesting clarification.
+- [x] **Slack Integration Foundation**
+  - [x] **Slack API Connection:** Establish secure connection to send direct messages via Slack.
+  - [x] **PO/DM Escalation via DM:** When Barley cannot provide enough information, send a Slack DM to the Product Owner or Delivery Manager requesting clarification.
 
 ---
 

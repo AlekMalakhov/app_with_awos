@@ -19,3 +19,5 @@ class BarleySettings(BaseSettings):
     api_url: str
     api_token: str
     timeout: int = 30
+    max_retries: int = 3
+    project_name: str = ""

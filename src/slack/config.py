@@ -12,6 +12,8 @@ class SlackSettings(BaseSettings):
         SLACK_SIGNING_SECRET: Secret for verifying webhook requests
         SLACK_MAX_RETRIES: Maximum retry attempts (default: 3)
         SLACK_SOCKET_MODE_ENABLED: Enable Socket Mode connection (default: True)
+        SLACK_ESCALATION_CONTACT_EMAIL: Email of PO/DM for low-confidence escalation DMs (default: "amalakhov@provectus.com")
+        SLACK_CONFIDENCE_THRESHOLD: ACs below this confidence score trigger escalation (default: 0.7)
     """
 
     model_config = SettingsConfigDict(env_prefix="SLACK_")
@@ -21,3 +23,5 @@ class SlackSettings(BaseSettings):
     signing_secret: str = ""
     max_retries: int = 3
     socket_mode_enabled: bool = True
+    escalation_contact_email: str | None = "amalakhov@provectus.com"
+    confidence_threshold: float = 0.7

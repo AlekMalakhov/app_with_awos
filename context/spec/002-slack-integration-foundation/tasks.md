@@ -1,0 +1,30 @@
+# Task List: Slack Integration Foundation
+
+- [x] **Slice 1: ACGenerator returns confidence score and gaps**
+  - [x] Create `src/ai/models.py` with `ACGenerationResult` Pydantic model (`acceptance_criteria: list[str]`, `confidence_score: float`, `confidence_gaps: list[str]`, `sufficient_information: bool`). **[Agent: python-expert]**
+  - [x] Update `AC_TOOL` schema in `src/ai/generator.py` to add `confidence_score` (number, 0.0–1.0) and `confidence_gaps` (array of string) fields. Update the system prompt to anchor the confidence scale (e.g., "0.9+ = all requirements clear, 0.5 = major gaps"). **[Agent: python-expert]**
+  - [x] Update `_parse_response()` and `generate()` in `src/ai/generator.py` to return `ACGenerationResult` instead of `list[str]`. **[Agent: python-expert]**
+  - [x] Update all callers of `generate()` — `PollingService._process_ticket()` in `src/polling/service.py` and `ACRegenerationService.start_regeneration()` in `src/slack/services/regeneration_service.py` — to unpack `ACGenerationResult`. No behavior change yet; just use `.acceptance_criteria` where `list[str]` was used before. **[Agent: python-expert]**
+  - [x] Update existing unit tests for `ACGenerator` in `tests/unit/test_ai_generator.py` to match the new return type. Add new test cases for confidence score and gaps parsing (valid values, edge cases: missing fields, out-of-range scores). **[Agent: python-expert]**
+  - [x] Run the full test suite (`pytest`). Verify all existing and new tests pass. Start the app (`uvicorn`) and confirm it boots without errors. **[Agent: qa-expert]**
+
+- [x] **Slice 2: SlackClient can look up a user by email and send Block Kit messages**
+  - [x] Add `escalation_contact_email` (`str | None`, default `amalakhov@provectus.com`) and `confidence_threshold` (`float`, default `0.7`) fields to `SlackSettings` in `src/slack/config.py`. **[Agent: python-expert]**
+  - [x] Add `lookup_user_by_email(email: str) -> str | None` method to `SlackClient` in `src/slack/client.py`. Calls `GET users.lookupByEmail`, returns Slack user ID or `None` on failure. Log errors. **[Agent: python-expert]**
+  - [x] Add `send_blocks_message(channel: str, blocks: list[dict], text: str) -> bool` method to `SlackClient` in `src/slack/client.py`. Sends a Block Kit message via `chat.postMessage` with `blocks` parameter. **[Agent: python-expert]**
+  - [x] Add unit tests for `lookup_user_by_email` in `tests/unit/test_slack_client.py`: user found, user not found (`user_not_found`), API error, invalid email. Add unit tests for `send_blocks_message`: successful send, API error. Use `pytest-httpx` mocking. **[Agent: python-expert]**
+  - [x] Run the full test suite (`pytest`). Verify all tests pass. Start the app and confirm it boots without errors. **[Agent: qa-expert]**
+
+- [x] **Slice 3: Escalation database tracking and SlackEscalationService**
+  - [x] Create migration `src/database/migrations/004_add_escalations.sql` with the `escalations` table schema (id, jira_ticket_key, confidence_score, confidence_gaps, slack_user_id, status, error_message, created_at). **[Agent: python-expert]**
+  - [x] Add `EscalationRecord` Pydantic model to `src/database/models.py`. Create `EscalationRepository` (following `ConversationRepository` pattern) with `create()` and `get_by_ticket_key()` methods. **[Agent: python-expert]**
+  - [x] Add `EscalationResult` Pydantic model to `src/slack/models.py` (sent: bool, slack_user_id: str | None, error: str | None). **[Agent: python-expert]**
+  - [x] Create `src/slack/services/escalation_service.py` with `SlackEscalationService`. Constructor accepts `SlackClient` and `SlackSettings`. Implement `escalate()` method: lookup user by email → open DM channel via `conversations.open` → compose Block Kit message → send. Return `EscalationResult`. **[Agent: python-expert]**
+  - [x] Add unit tests: `EscalationRepository` CRUD (ephemeral SQLite), `SlackEscalationService.escalate()` with mocked `SlackClient` (success path, user-not-found path, DM send failure). **[Agent: python-expert]**
+  - [x] Run the full test suite (`pytest`). Verify all tests pass. Start the app and confirm migration runs and app boots without errors. **[Agent: qa-expert]**
+
+- [x] **Slice 4: Pipeline integration — confidence check routes to escalation or direct write**
+  - [x] Modify `PollingService._process_ticket()` in `src/polling/service.py`: after `ACGenerator.generate()`, check `confidence_score` against threshold. If >= threshold, write ACs to Jira (existing behavior). If < threshold, call `SlackEscalationService.escalate()`, record in `escalations` table, and write draft ACs with the appropriate note (clarification requested) or warning (delivery failed). **[Agent: python-expert]**
+  - [x] Wire `SlackEscalationService` and `EscalationRepository` in `src/main.py` lifespan: instantiate and pass to `PollingService`. **[Agent: python-expert]**
+  - [x] Add unit tests for the updated `PollingService._process_ticket()` in `tests/unit/test_polling_service.py`: (1) high-confidence path — no escalation, ACs written directly; (2) low-confidence + DM sent — draft ACs written with "clarification requested" note; (3) low-confidence + DM failed — draft ACs written with "could not be delivered" warning. **[Agent: python-expert]**
+  - [x] Run the full test suite (`pytest`). Then perform end-to-end verification: (1) Use the Jira API (via `curl` or the app's Jira client) to **create a new test ticket** with a deliberately vague description (e.g., title: "User login flow", description: "Need to add login") so the AI produces a low confidence score. (2) Start the app and let the polling service pick up the ticket. (3) Use the **Slack MCP** tools (`conversations_history`, `conversations_search_messages`) to verify a DM was received in the escalation contact's Slack DM channel, containing the ticket key, summary, Jira link, and clarifying questions in Block Kit format with a natural tone (no confidence scores or AI internals exposed). (4) Verify the Jira ticket has draft ACs with the "clarification requested" note. (5) **Clean up:** delete the test ticket that was created for testing. **[Agent: qa-expert]**

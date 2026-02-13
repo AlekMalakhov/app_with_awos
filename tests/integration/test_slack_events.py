@@ -19,6 +19,7 @@ def slack_settings() -> SlackSettings:
     """Create SlackSettings with test values."""
     return SlackSettings(
         bot_token="xoxb-test-token-12345",
+        app_token="xapp-test-token",
         signing_secret="test-signing-secret-abc123",
         max_retries=1,
     )

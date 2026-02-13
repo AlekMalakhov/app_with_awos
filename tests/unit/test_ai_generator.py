@@ -7,6 +7,7 @@ import pytest
 from src.ai.config import AISettings
 from src.ai.exceptions import AIInvalidResponseError
 from src.ai.generator import ACGenerator
+from src.ai.models import ACGenerationResult
 
 
 @pytest.fixture
@@ -35,6 +36,8 @@ def create_mock_tool_use_response(
     sufficient_information: bool,
     acceptance_criteria: list[str],
     skip_reason: str | None = None,
+    confidence_score: float | None = None,
+    confidence_gaps: list[str] | None = None,
 ) -> MagicMock:
     """Create a mock Anthropic API response with tool_use block.
 
@@ -42,6 +45,10 @@ def create_mock_tool_use_response(
         sufficient_information: Whether the ticket has sufficient info
         acceptance_criteria: List of AC strings
         skip_reason: Optional reason for skipping
+        confidence_score: Optional confidence score (omitted from
+            tool_input when None, to test default handling)
+        confidence_gaps: Optional confidence gaps (omitted from
+            tool_input when None, to test default handling)
 
     Returns:
         Mock response object matching Anthropic API structure
@@ -52,6 +59,10 @@ def create_mock_tool_use_response(
     }
     if skip_reason is not None:
         tool_input["skip_reason"] = skip_reason
+    if confidence_score is not None:
+        tool_input["confidence_score"] = confidence_score
+    if confidence_gaps is not None:
+        tool_input["confidence_gaps"] = confidence_gaps
 
     tool_use_block = MagicMock()
     tool_use_block.type = "tool_use"
@@ -108,7 +119,7 @@ class TestACGeneratorGenerate:
     async def test_generate_returns_acs_when_sufficient_information(
         self, ai_settings_enabled: AISettings
     ):
-        """Test generate() returns ACs when API returns valid response."""
+        """Test generate() returns ACGenerationResult when API returns valid response."""
         expected_acs = [
             (
                 "Given a user on the login page, when they enter valid "
@@ -121,6 +132,8 @@ class TestACGeneratorGenerate:
         mock_response = create_mock_tool_use_response(
             sufficient_information=True,
             acceptance_criteria=expected_acs,
+            confidence_score=0.9,
+            confidence_gaps=[],
         )
 
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
@@ -134,18 +147,24 @@ class TestACGeneratorGenerate:
                 description="Users should be able to log in with email and password.",
             )
 
-            assert result == expected_acs
-            assert len(result) == 3
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == expected_acs
+            assert len(result.acceptance_criteria) == 3
+            assert result.sufficient_information is True
+            assert result.confidence_score == 0.9
+            assert result.confidence_gaps == []
 
     @pytest.mark.asyncio
-    async def test_generate_returns_empty_list_when_insufficient_information(
+    async def test_generate_returns_empty_acs_when_insufficient_information(
         self, ai_settings_enabled: AISettings
     ):
-        """Test generate() returns empty list when AI determines insufficient info."""
+        """Test generate() returns result with empty ACs when insufficient info."""
         mock_response = create_mock_tool_use_response(
             sufficient_information=False,
             acceptance_criteria=[],
             skip_reason="The ticket description is too vague to generate specific ACs.",
+            confidence_score=0.2,
+            confidence_gaps=["vague description"],
         )
 
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
@@ -159,16 +178,20 @@ class TestACGeneratorGenerate:
                 description="It's broken.",
             )
 
-            assert result == []
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == []
+            assert result.sufficient_information is False
 
     @pytest.mark.asyncio
-    async def test_generate_returns_empty_list_when_acceptance_criteria_empty(
+    async def test_generate_returns_empty_acs_when_acceptance_criteria_empty(
         self, ai_settings_enabled: AISettings
     ):
-        """Test that generate() returns empty list when AI returns empty AC list."""
+        """Test that generate() returns result with empty ACs when AI returns empty list."""
         mock_response = create_mock_tool_use_response(
             sufficient_information=True,
             acceptance_criteria=[],
+            confidence_score=0.5,
+            confidence_gaps=[],
         )
 
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
@@ -182,13 +205,15 @@ class TestACGeneratorGenerate:
                 description="Some description",
             )
 
-            assert result == []
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == []
+            assert result.sufficient_information is True
 
     @pytest.mark.asyncio
-    async def test_generate_returns_empty_list_when_disabled(
+    async def test_generate_returns_empty_result_when_disabled(
         self, ai_settings_disabled: AISettings
     ):
-        """Test that generate() returns empty list when ACGenerator is disabled."""
+        """Test that generate() returns empty ACGenerationResult when disabled."""
         generator = ACGenerator(ai_settings_disabled)
 
         result = await generator.generate(
@@ -196,13 +221,17 @@ class TestACGeneratorGenerate:
             description="Any description",
         )
 
-        assert result == []
+        assert isinstance(result, ACGenerationResult)
+        assert result.acceptance_criteria == []
+        assert result.sufficient_information is False
+        assert result.confidence_score == 0.0
+        assert result.confidence_gaps == ["Generator is disabled"]
 
     @pytest.mark.asyncio
-    async def test_generate_returns_empty_list_on_api_exception(
+    async def test_generate_returns_empty_result_on_api_exception(
         self, ai_settings_enabled: AISettings
     ):
-        """Test that generate() returns empty list when API call raises exception."""
+        """Test that generate() returns empty ACGenerationResult on API exception."""
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_client.messages.create.side_effect = Exception("API connection failed")
@@ -214,7 +243,11 @@ class TestACGeneratorGenerate:
                 description="Some description",
             )
 
-            assert result == []
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == []
+            assert result.sufficient_information is False
+            assert result.confidence_score == 0.0
+            assert result.confidence_gaps == ["Generation failed due to an error"]
 
     @pytest.mark.asyncio
     async def test_generate_handles_empty_description(
@@ -229,6 +262,8 @@ class TestACGeneratorGenerate:
         mock_response = create_mock_tool_use_response(
             sufficient_information=True,
             acceptance_criteria=expected_acs,
+            confidence_score=0.7,
+            confidence_gaps=["no description provided"],
         )
 
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
@@ -247,7 +282,8 @@ class TestACGeneratorGenerate:
             messages = call_args.kwargs["messages"]
             assert "(No description provided)" in messages[0]["content"]
 
-            assert result == expected_acs
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == expected_acs
 
     @pytest.mark.asyncio
     async def test_generate_calls_api_with_correct_parameters(
@@ -345,6 +381,8 @@ class TestACGeneratorParseResponse:
         mock_response = create_mock_tool_use_response(
             sufficient_information=True,
             acceptance_criteria=expected_acs,
+            confidence_score=0.95,
+            confidence_gaps=[],
         )
 
         with patch("src.ai.generator.Anthropic"):
@@ -352,16 +390,22 @@ class TestACGeneratorParseResponse:
 
             result = generator._parse_response(mock_response)
 
-            assert result == expected_acs
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == expected_acs
+            assert result.sufficient_information is True
+            assert result.confidence_score == 0.95
+            assert result.confidence_gaps == []
 
-    def test_parse_response_returns_empty_list_when_insufficient_info(
+    def test_parse_response_returns_empty_acs_when_insufficient_info(
         self, ai_settings_enabled: AISettings
     ):
-        """Test _parse_response() returns empty when insufficient_information false."""
+        """Test _parse_response() returns result with empty ACs when insufficient info."""
         mock_response = create_mock_tool_use_response(
             sufficient_information=False,
             acceptance_criteria=[],
             skip_reason="Not enough detail",
+            confidence_score=0.3,
+            confidence_gaps=["missing details"],
         )
 
         with patch("src.ai.generator.Anthropic"):
@@ -369,7 +413,11 @@ class TestACGeneratorParseResponse:
 
             result = generator._parse_response(mock_response)
 
-            assert result == []
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == []
+            assert result.sufficient_information is False
+            assert result.confidence_score == 0.3
+            assert result.confidence_gaps == ["missing details"]
 
     def test_parse_response_handles_missing_sufficient_information_field(
         self, ai_settings_enabled: AISettings
@@ -391,8 +439,174 @@ class TestACGeneratorParseResponse:
 
             result = generator._parse_response(response)
 
-            # Should return empty list because sufficient_information defaults to False
-            assert result == []
+            # Should return empty ACs because sufficient_information defaults to False
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == []
+            assert result.sufficient_information is False
+
+
+class TestACGeneratorConfidenceScoreAndGaps:
+    """Test suite for confidence_score and confidence_gaps parsing in _parse_response()."""
+
+    def test_parse_response_with_valid_confidence_score_and_empty_gaps(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() correctly parses high confidence with no gaps."""
+        mock_response = create_mock_tool_use_response(
+            sufficient_information=True,
+            acceptance_criteria=["AC 1", "AC 2"],
+            confidence_score=0.85,
+            confidence_gaps=[],
+        )
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(mock_response)
+
+            assert result.confidence_score == 0.85
+            assert result.confidence_gaps == []
+            assert result.acceptance_criteria == ["AC 1", "AC 2"]
+            assert result.sufficient_information is True
+
+    def test_parse_response_with_low_confidence_and_gaps(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() correctly parses low confidence with specific gaps."""
+        expected_gaps = [
+            "unclear user role",
+            "missing error handling behavior",
+        ]
+        mock_response = create_mock_tool_use_response(
+            sufficient_information=True,
+            acceptance_criteria=["AC 1"],
+            confidence_score=0.4,
+            confidence_gaps=expected_gaps,
+        )
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(mock_response)
+
+            assert result.confidence_score == 0.4
+            assert result.confidence_gaps == expected_gaps
+            assert len(result.confidence_gaps) == 2
+
+    def test_parse_response_defaults_confidence_score_when_missing(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() defaults confidence_score to 1.0 when absent."""
+        tool_use_block = MagicMock()
+        tool_use_block.type = "tool_use"
+        tool_use_block.name = "submit_acceptance_criteria"
+        tool_use_block.input = {
+            "sufficient_information": True,
+            "acceptance_criteria": ["AC 1", "AC 2"],
+            "confidence_gaps": [],
+            # confidence_score intentionally omitted
+        }
+
+        response = MagicMock()
+        response.content = [tool_use_block]
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(response)
+
+            assert result.confidence_score == 1.0
+            assert result.confidence_gaps == []
+            assert result.acceptance_criteria == ["AC 1", "AC 2"]
+
+    def test_parse_response_defaults_confidence_gaps_when_missing(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() defaults confidence_gaps to [] when absent."""
+        tool_use_block = MagicMock()
+        tool_use_block.type = "tool_use"
+        tool_use_block.name = "submit_acceptance_criteria"
+        tool_use_block.input = {
+            "sufficient_information": True,
+            "acceptance_criteria": ["AC 1"],
+            "confidence_score": 0.75,
+            # confidence_gaps intentionally omitted
+        }
+
+        response = MagicMock()
+        response.content = [tool_use_block]
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(response)
+
+            assert result.confidence_score == 0.75
+            assert result.confidence_gaps == []
+
+    def test_parse_response_defaults_both_confidence_fields_when_missing(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() applies defaults when both confidence fields absent."""
+        tool_use_block = MagicMock()
+        tool_use_block.type = "tool_use"
+        tool_use_block.name = "submit_acceptance_criteria"
+        tool_use_block.input = {
+            "sufficient_information": True,
+            "acceptance_criteria": ["AC 1", "AC 2", "AC 3"],
+            # Both confidence_score and confidence_gaps intentionally omitted
+        }
+
+        response = MagicMock()
+        response.content = [tool_use_block]
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(response)
+
+            assert result.confidence_score == 1.0
+            assert result.confidence_gaps == []
+            assert result.acceptance_criteria == ["AC 1", "AC 2", "AC 3"]
+            assert result.sufficient_information is True
+
+    def test_parse_response_with_confidence_score_at_lower_boundary(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() handles confidence_score of 0.0."""
+        mock_response = create_mock_tool_use_response(
+            sufficient_information=True,
+            acceptance_criteria=["AC 1"],
+            confidence_score=0.0,
+            confidence_gaps=["no information available"],
+        )
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(mock_response)
+
+            assert result.confidence_score == 0.0
+            assert result.confidence_gaps == ["no information available"]
+
+    def test_parse_response_with_confidence_score_at_upper_boundary(
+        self, ai_settings_enabled: AISettings
+    ):
+        """Test _parse_response() handles confidence_score of 1.0."""
+        mock_response = create_mock_tool_use_response(
+            sufficient_information=True,
+            acceptance_criteria=["AC 1", "AC 2"],
+            confidence_score=1.0,
+            confidence_gaps=[],
+        )
+
+        with patch("src.ai.generator.Anthropic"):
+            generator = ACGenerator(ai_settings_enabled)
+
+            result = generator._parse_response(mock_response)
+
+            assert result.confidence_score == 1.0
+            assert result.confidence_gaps == []
 
 
 class TestACGeneratorIntegration:
@@ -400,7 +614,7 @@ class TestACGeneratorIntegration:
 
     @pytest.mark.asyncio
     async def test_full_flow_with_valid_ticket(self, ai_settings_enabled: AISettings):
-        """Test complete flow from generate() to parsed ACs."""
+        """Test complete flow from generate() to parsed ACGenerationResult."""
         expected_acs = [
             (
                 "Given a user clicks 'Add to Cart', then the item is added "
@@ -414,6 +628,8 @@ class TestACGeneratorIntegration:
         mock_response = create_mock_tool_use_response(
             sufficient_information=True,
             acceptance_criteria=expected_acs,
+            confidence_score=0.95,
+            confidence_gaps=[],
         )
 
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
@@ -435,8 +651,12 @@ class TestACGeneratorIntegration:
                 ),
             )
 
-            assert result == expected_acs
-            assert len(result) == 4
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == expected_acs
+            assert len(result.acceptance_criteria) == 4
+            assert result.sufficient_information is True
+            assert result.confidence_score == 0.95
+            assert result.confidence_gaps == []
 
     @pytest.mark.asyncio
     async def test_full_flow_with_vague_ticket(self, ai_settings_enabled: AISettings):
@@ -448,6 +668,8 @@ class TestACGeneratorIntegration:
                 "The description 'make it work' is too vague to generate "
                 "specific acceptance criteria."
             ),
+            confidence_score=0.1,
+            confidence_gaps=["extremely vague description"],
         )
 
         with patch("src.ai.generator.Anthropic") as mock_anthropic:
@@ -461,7 +683,11 @@ class TestACGeneratorIntegration:
                 description="Make it work",
             )
 
-            assert result == []
+            assert isinstance(result, ACGenerationResult)
+            assert result.acceptance_criteria == []
+            assert result.sufficient_information is False
+            assert result.confidence_score == 0.1
+            assert result.confidence_gaps == ["extremely vague description"]
 
 
 def create_mock_topics_tool_use_response(topics: str) -> MagicMock:

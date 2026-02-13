@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 from src.database.config import DatabaseSettings
 from src.database.connection import get_database_connection
-from src.database.models import ConversationState, ConversationStatus, MessageRecord
+from src.database.models import (
+    ConversationState,
+    ConversationStatus,
+    EscalationRecord,
+    MessageRecord,
+)
 
 
 class ConversationRepository:
@@ -81,8 +86,9 @@ class ConversationRepository:
             INSERT INTO conversations (
                 id, slack_user_id, slack_channel_id, jira_ticket_key,
                 status, existing_acs, proposed_acs, description_adf,
-                error_message, message_history, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                error_message, slack_thread_ts, message_history,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 conversation_dict["id"],
@@ -94,6 +100,7 @@ class ConversationRepository:
                 proposed_acs_json,
                 description_adf_json,
                 conversation_dict["error_message"],
+                conversation_dict["slack_thread_ts"],
                 message_history_json,
                 conversation_dict["created_at"],
                 conversation_dict["updated_at"],
@@ -112,6 +119,7 @@ class ConversationRepository:
             proposed_acs=conversation_dict["proposed_acs"],
             description_adf=conversation_dict["description_adf"],
             error_message=conversation_dict["error_message"],
+            slack_thread_ts=conversation_dict["slack_thread_ts"],
             message_history=[
                 MessageRecord(**msg) if isinstance(msg, dict) else msg
                 for msg in conversation_dict["message_history"]
@@ -221,6 +229,7 @@ class ConversationRepository:
                 proposed_acs = ?,
                 description_adf = ?,
                 error_message = ?,
+                slack_thread_ts = ?,
                 message_history = ?,
                 updated_at = ?
             WHERE id = ?
@@ -234,6 +243,7 @@ class ConversationRepository:
                 proposed_acs_json,
                 description_adf_json,
                 conversation_dict["error_message"],
+                conversation_dict["slack_thread_ts"],
                 message_history_json,
                 conversation_dict["updated_at"],
                 conversation_dict["id"],
@@ -252,6 +262,7 @@ class ConversationRepository:
             proposed_acs=conversation_dict["proposed_acs"],
             description_adf=conversation_dict["description_adf"],
             error_message=conversation_dict["error_message"],
+            slack_thread_ts=conversation_dict["slack_thread_ts"],
             message_history=[
                 MessageRecord(**msg) if isinstance(msg, dict) else msg
                 for msg in conversation_dict["message_history"]
@@ -380,6 +391,13 @@ class ConversationRepository:
             # Column doesn't exist in this database version
             pass
 
+        # Handle slack_thread_ts column which may not exist in older databases
+        slack_thread_ts = None
+        try:
+            slack_thread_ts = row["slack_thread_ts"]
+        except (IndexError, KeyError):
+            pass
+
         message_history_raw = json.loads(row["message_history"])
         message_history = [MessageRecord(**msg) for msg in message_history_raw]
 
@@ -393,7 +411,111 @@ class ConversationRepository:
             proposed_acs=proposed_acs,
             description_adf=description_adf,
             error_message=error_message,
+            slack_thread_ts=slack_thread_ts,
             message_history=message_history,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+
+class EscalationRepository:
+    """Repository for CRUD operations on escalation records.
+
+    Provides methods for creating and querying escalation records
+    in the SQLite database.
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection | None = None,
+        settings: DatabaseSettings | None = None,
+    ) -> None:
+        """Initialize the repository with a database connection.
+
+        Args:
+            conn: Optional SQLite connection. If None, creates a new connection.
+            settings: Optional DatabaseSettings. Used only if conn is None.
+        """
+        if conn is not None:
+            self._conn = conn
+            self._owns_connection = False
+        else:
+            self._conn = get_database_connection(settings)
+            self._owns_connection = True
+
+    def close(self) -> None:
+        """Close the database connection if owned by this repository."""
+        if self._owns_connection:
+            self._conn.close()
+
+    def create(self, record: EscalationRecord) -> None:
+        """Insert a new escalation record into the database.
+
+        The confidence_gaps list is serialized to a JSON string for storage.
+
+        Args:
+            record: EscalationRecord to persist.
+        """
+        confidence_gaps_json = json.dumps(record.confidence_gaps)
+
+        self._conn.execute(
+            """
+            INSERT INTO escalations (
+                id, jira_ticket_key, confidence_score, confidence_gaps,
+                slack_user_id, status, error_message, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.id,
+                record.jira_ticket_key,
+                record.confidence_score,
+                confidence_gaps_json,
+                record.slack_user_id,
+                record.status,
+                record.error_message,
+                record.created_at,
+            ),
+        )
+        self._conn.commit()
+
+    def get_by_ticket_key(self, ticket_key: str) -> list[EscalationRecord]:
+        """Retrieve all escalation records for a given Jira ticket key.
+
+        The confidence_gaps field is deserialized from its JSON string
+        representation back into a list of strings.
+
+        Args:
+            ticket_key: The Jira ticket key (e.g., "PROJ-123").
+
+        Returns:
+            List of EscalationRecord instances, possibly empty.
+        """
+        cursor = self._conn.execute(
+            "SELECT * FROM escalations WHERE jira_ticket_key = ?",
+            (ticket_key,),
+        )
+        rows = cursor.fetchall()
+
+        return [self._row_to_escalation(row) for row in rows]
+
+    def _row_to_escalation(self, row: sqlite3.Row) -> EscalationRecord:
+        """Convert a database row to an EscalationRecord model.
+
+        Args:
+            row: SQLite row object.
+
+        Returns:
+            EscalationRecord instance.
+        """
+        confidence_gaps = json.loads(row["confidence_gaps"])
+
+        return EscalationRecord(
+            id=row["id"],
+            jira_ticket_key=row["jira_ticket_key"],
+            confidence_score=row["confidence_score"],
+            confidence_gaps=confidence_gaps,
+            slack_user_id=row["slack_user_id"],
+            status=row["status"],
+            error_message=row["error_message"],
+            created_at=row["created_at"],
         )

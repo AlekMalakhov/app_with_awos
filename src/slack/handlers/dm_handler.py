@@ -10,6 +10,7 @@ import logging
 import re
 import time
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.database import ConversationRepository, ConversationState, ConversationStatus
@@ -27,6 +28,20 @@ if TYPE_CHECKING:
     from src.slack.client import SlackClient
     from src.slack.handlers.intent_classifier import IntentClassifier
     from src.slack.services.regeneration_service import ACRegenerationService
+
+
+@dataclass
+class DMResponse:
+    """Response from the DM handler containing text and optional thread_ts.
+
+    Attributes:
+        text: The response message text.
+        thread_ts: Optional Slack thread timestamp. When set, the response
+            should be posted as a reply in that thread.
+    """
+
+    text: str
+    thread_ts: str | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +166,7 @@ class DMHandler:
         channel_id: str,
         text: str,
         event_ts: str | None = None,
-    ) -> str | None:
+    ) -> DMResponse | None:
         """Process an incoming DM message and return response if needed.
 
         Extracts Jira ticket keys from the message text. If a ticket key is found,
@@ -171,7 +186,8 @@ class DMHandler:
             event_ts: Optional Slack event timestamp for deduplication.
 
         Returns:
-            Response message to send back to the user, or None if no response needed.
+            DMResponse with text and optional thread_ts, or None if no response
+            needed.
         """
         # Deduplicate events when event_ts is provided
         if event_ts is not None and self._is_duplicate_event(event_ts, channel_id):
@@ -194,15 +210,18 @@ class DMHandler:
 
         if ticket_key:
             # Create new conversation with FETCHING_TICKET status
+            # Store event_ts as thread_ts so all replies go to this thread
             conversation = self._create_conversation(
                 user_id=user_id,
                 channel_id=channel_id,
                 ticket_key=ticket_key,
+                thread_ts=event_ts,
             )
             logger.info(
-                "Created conversation %s for ticket %s",
+                "Created conversation %s for ticket %s (thread_ts=%s)",
                 conversation.id,
                 ticket_key,
+                event_ts,
             )
 
             # If regeneration service is available, run full flow
@@ -212,21 +231,30 @@ class DMHandler:
                         conversation=conversation,
                         ticket_key=ticket_key,
                     )
-                    return format_comparison(conversation)
+                    return DMResponse(
+                        text=format_comparison(conversation),
+                        thread_ts=conversation.slack_thread_ts,
+                    )
                 except JiraTicketNotFoundError:
                     error_msg = (
                         f"I couldn't find ticket {ticket_key} in Jira. "
                         "Please check the ticket key and try again."
                     )
                     self._set_conversation_error(conversation, error_msg)
-                    return error_msg
+                    return DMResponse(
+                        text=error_msg,
+                        thread_ts=conversation.slack_thread_ts,
+                    )
                 except EmptyDescriptionError:
                     error_msg = (
                         f"Ticket {ticket_key} doesn't have a description. "
                         "Please add a description in Jira and try again."
                     )
                     self._set_conversation_error(conversation, error_msg)
-                    return error_msg
+                    return DMResponse(
+                        text=error_msg,
+                        thread_ts=conversation.slack_thread_ts,
+                    )
                 except JiraIssueTypeNotSupportedError as exc:
                     error_msg = (
                         f"Ticket {ticket_key} has an unsupported issue type "
@@ -234,7 +262,10 @@ class DMHandler:
                         f"{exc}"
                     )
                     self._set_conversation_error(conversation, error_msg)
-                    return error_msg
+                    return DMResponse(
+                        text=error_msg,
+                        thread_ts=conversation.slack_thread_ts,
+                    )
                 except JiraAuthenticationError:
                     error_msg = (
                         f"I don't have access to ticket {ticket_key}. "
@@ -242,25 +273,34 @@ class DMHandler:
                         "has the necessary permissions."
                     )
                     self._set_conversation_error(conversation, error_msg)
-                    return error_msg
+                    return DMResponse(
+                        text=error_msg,
+                        thread_ts=conversation.slack_thread_ts,
+                    )
                 except JiraConnectionError:
                     error_msg = (
                         "I'm having trouble connecting to Jira right now. "
                         "Please try again in a few minutes."
                     )
                     self._set_conversation_error(conversation, error_msg)
-                    return error_msg
+                    return DMResponse(
+                        text=error_msg,
+                        thread_ts=conversation.slack_thread_ts,
+                    )
 
             # Fall back to simple acknowledgment if no service
-            return f"Processing {ticket_key}..."
+            return DMResponse(
+                text=f"Processing {ticket_key}...",
+                thread_ts=conversation.slack_thread_ts,
+            )
 
         # No ticket key found - check for active conversation
         active_conversation = self._repository.get_active(user_id, channel_id)
 
         if active_conversation is None:
-            # No active conversation - prompt for ticket key
+            # No active conversation - prompt for ticket key (no thread)
             logger.debug("No active conversation found, prompting for ticket key")
-            return "Please provide a Jira ticket key (e.g., PROJ-123)"
+            return DMResponse(text="Please provide a Jira ticket key (e.g., PROJ-123)")
 
         if active_conversation.status == ConversationStatus.AWAITING_TICKET:
             # Active conversation is waiting for a ticket key
@@ -268,7 +308,7 @@ class DMHandler:
                 "Active conversation %s is in AWAITING_TICKET state",
                 active_conversation.id,
             )
-            return "Please provide a Jira ticket key (e.g., PROJ-123)"
+            return DMResponse(text="Please provide a Jira ticket key (e.g., PROJ-123)")
 
         if active_conversation.status == ConversationStatus.COMPARING:
             # User is responding to AC comparison - classify intent
@@ -292,10 +332,12 @@ class DMHandler:
                 f"Previous request for {active_conversation.jira_ticket_key} "
                 "got stuck. Please try again.",
             )
-            return (
-                "It looks like your previous request got stuck. "
-                "I've cleared it so you can start fresh. "
-                "Please provide a Jira ticket key (e.g., PROJ-123)"
+            return DMResponse(
+                text=(
+                    "It looks like your previous request got stuck. "
+                    "I've cleared it so you can start fresh. "
+                    "Please provide a Jira ticket key (e.g., PROJ-123)"
+                ),
             )
 
         # Active conversation is in another state (e.g., PROCESSING_MODIFICATION)
@@ -310,7 +352,7 @@ class DMHandler:
         self,
         conversation: ConversationState,
         text: str,
-    ) -> str | None:
+    ) -> DMResponse | None:
         """Handle user response when conversation is in COMPARING state.
 
         Classifies the user's intent and takes appropriate action:
@@ -323,7 +365,7 @@ class DMHandler:
             text: The user's message text.
 
         Returns:
-            Response message or None if no response needed.
+            DMResponse with text and thread_ts, or None if no response needed.
         """
         if self._intent_classifier is None or self._regeneration_service is None:
             logger.warning(
@@ -331,6 +373,8 @@ class DMHandler:
                 "and regeneration_service"
             )
             return None
+
+        thread_ts = conversation.slack_thread_ts
 
         # Classify user intent
         intent_result = await self._intent_classifier.classify_intent(text)
@@ -348,7 +392,10 @@ class DMHandler:
             ticket_key = conversation.jira_ticket_key or "Unknown"
             ticket_url = self._build_jira_url(ticket_key)
 
-            return f"Done! ACs updated on {ticket_key}. {ticket_url}"
+            return DMResponse(
+                text=f"Done! ACs updated on {ticket_key}. {ticket_url}",
+                thread_ts=thread_ts,
+            )
 
         if intent_result.intent == Intent.REJECT:
             # Cancel the conversation - original ACs remain unchanged
@@ -357,7 +404,10 @@ class DMHandler:
                 "Conversation %s cancelled by user rejection",
                 conversation.id,
             )
-            return "Cancelled. Original ACs remain unchanged."
+            return DMResponse(
+                text="Cancelled. Original ACs remain unchanged.",
+                thread_ts=thread_ts,
+            )
 
         if intent_result.intent == Intent.MODIFY:
             # Regenerate ACs with user feedback
@@ -377,7 +427,10 @@ class DMHandler:
             )
 
             # Return new comparison message
-            return format_comparison(updated_conversation)
+            return DMResponse(
+                text=format_comparison(updated_conversation),
+                thread_ts=thread_ts,
+            )
 
         # Unknown intent - should not happen
         logger.warning(
@@ -466,6 +519,7 @@ class DMHandler:
         user_id: str,
         channel_id: str,
         ticket_key: str,
+        thread_ts: str | None = None,
     ) -> ConversationState:
         """Create a new conversation record with FETCHING_TICKET status.
 
@@ -473,6 +527,7 @@ class DMHandler:
             user_id: The Slack user ID who initiated the conversation.
             channel_id: The Slack channel/DM ID for the conversation.
             ticket_key: The Jira ticket key to process.
+            thread_ts: Optional Slack message timestamp to use as thread parent.
 
         Returns:
             The created ConversationState.
@@ -483,6 +538,7 @@ class DMHandler:
             slack_channel_id=channel_id,
             jira_ticket_key=ticket_key,
             status=ConversationStatus.FETCHING_TICKET,
+            slack_thread_ts=thread_ts,
         )
 
         return self._repository.create(conversation)

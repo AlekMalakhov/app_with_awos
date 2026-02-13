@@ -1,12 +1,4 @@
 {
   "mcpServers": {
-    "playwright": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "@anthropic/mcp-playwright"
-      ],
-      "env": {}
-    }
   }
 }

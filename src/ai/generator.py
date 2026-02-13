@@ -6,6 +6,7 @@ from anthropic import Anthropic
 
 from src.ai.config import AISettings
 from src.ai.exceptions import AIInvalidResponseError
+from src.ai.models import ACGenerationResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +39,31 @@ AC_TOOL = {
                     "(only when sufficient_information is false)"
                 ),
             },
+            "confidence_score": {
+                "type": "number",
+                "description": (
+                    "A value between 0.0 and 1.0 representing the AI's "
+                    "confidence in the completeness and accuracy of the "
+                    "generated acceptance criteria."
+                ),
+            },
+            "confidence_gaps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Specific areas where the AI lacked information to "
+                    "produce fully confident acceptance criteria (e.g., "
+                    "'unclear user role', 'missing error handling behavior'). "
+                    "Should be empty when confidence is high."
+                ),
+            },
         },
-        "required": ["sufficient_information", "acceptance_criteria"],
+        "required": [
+            "sufficient_information",
+            "acceptance_criteria",
+            "confidence_score",
+            "confidence_gaps",
+        ],
     },
 }
 
@@ -100,6 +124,20 @@ or "Documentation is updated"
 - If the description lacks sufficient detail to write meaningful ACs, set \
 sufficient_information to false and explain why in skip_reason
 
+CONFIDENCE SCORING:
+After generating acceptance criteria, assign a confidence_score between 0.0 \
+and 1.0 using the following scale:
+- 0.9-1.0: All requirements are clear and unambiguous, ACs are comprehensive
+- 0.7-0.89: Most requirements are clear, minor gaps exist
+- 0.5-0.69: Significant gaps in the description, several assumptions were made
+- Below 0.5: Major information is missing, ACs are largely speculative
+
+When confidence is below 0.9, list the specific gaps or questions in \
+confidence_gaps. Each entry should describe a concrete area where information \
+was lacking (e.g., "unclear user role", "missing error handling behavior", \
+"no success/failure states defined"). When confidence is 0.9 or above, \
+confidence_gaps should be empty.
+
 Use the submit_acceptance_criteria tool to provide your response."""
 
 
@@ -130,7 +168,7 @@ class ACGenerator:
         """
         return self._settings.is_enabled
 
-    async def generate(self, summary: str, description: str) -> list[str]:
+    async def generate(self, summary: str, description: str) -> ACGenerationResult:
         """Generate acceptance criteria for a Jira ticket.
 
         Args:
@@ -138,12 +176,17 @@ class ACGenerator:
             description: Ticket description text
 
         Returns:
-            List of AC strings, or empty list if description insufficient
-            or generator is disabled.
+            ACGenerationResult with generated criteria and confidence
+            metadata, or an empty result if the generator is disabled.
         """
         if not self.is_enabled:
             logger.warning("ACGenerator is disabled (no API key configured)")
-            return []
+            return ACGenerationResult(
+                acceptance_criteria=[],
+                confidence_score=0.0,
+                confidence_gaps=["Generator is disabled"],
+                sufficient_information=False,
+            )
 
         user_message = f"""TICKET SUMMARY: {summary}
 
@@ -171,16 +214,21 @@ submit_acceptance_criteria tool."""
             raise
         except Exception as e:
             logger.error("Failed to generate ACs: %s", e)
-            return []
+            return ACGenerationResult(
+                acceptance_criteria=[],
+                confidence_score=0.0,
+                confidence_gaps=["Generation failed due to an error"],
+                sufficient_information=False,
+            )
 
-    def _parse_response(self, response) -> list[str]:
+    def _parse_response(self, response) -> ACGenerationResult:
         """Parse the tool_use response and extract acceptance criteria.
 
         Args:
             response: Anthropic API response object
 
         Returns:
-            List of acceptance criteria strings
+            ACGenerationResult populated from the tool response fields.
 
         Raises:
             AIInvalidResponseError: When response does not contain expected
@@ -191,6 +239,9 @@ submit_acceptance_criteria tool."""
                 tool_input = block.input
 
                 sufficient = tool_input.get("sufficient_information", False)
+                confidence_score = tool_input.get("confidence_score", 1.0)
+                confidence_gaps = tool_input.get("confidence_gaps", [])
+
                 if not sufficient:
                     skip_reason = tool_input.get(
                         "skip_reason", "Insufficient information"
@@ -198,15 +249,30 @@ submit_acceptance_criteria tool."""
                     logger.info(
                         "AI determined insufficient information: %s", skip_reason
                     )
-                    return []
+                    return ACGenerationResult(
+                        acceptance_criteria=[],
+                        confidence_score=confidence_score,
+                        confidence_gaps=confidence_gaps,
+                        sufficient_information=False,
+                    )
 
                 acs = tool_input.get("acceptance_criteria", [])
                 if not acs:
                     logger.warning("AI returned empty acceptance criteria list")
-                    return []
+                    return ACGenerationResult(
+                        acceptance_criteria=[],
+                        confidence_score=confidence_score,
+                        confidence_gaps=confidence_gaps,
+                        sufficient_information=True,
+                    )
 
                 logger.info("AI generated %d acceptance criteria", len(acs))
-                return acs
+                return ACGenerationResult(
+                    acceptance_criteria=acs,
+                    confidence_score=confidence_score,
+                    confidence_gaps=confidence_gaps,
+                    sufficient_information=True,
+                )
 
         logger.error("No tool_use block found in AI response")
         raise AIInvalidResponseError(

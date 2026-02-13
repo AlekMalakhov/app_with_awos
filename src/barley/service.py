@@ -63,14 +63,29 @@ class BarleyEnrichmentService:
         topics = await self._ac_generator.extract_topics(summary, description)
         logger.debug("Extracted topics: %s", topics)
 
+        project_ctx = ""
+        if self._settings.project_name:
+            project_ctx = f"Project: {self._settings.project_name}\n"
+
         prompt = (
-            "Given a Jira ticket about the following topics, provide relevant "
-            f"project context and domain knowledge: {topics}"
+            f"{project_ctx}"
+            f"Feature: {summary}\n"
+            f"Topics: {topics}\n\n"
+            "Provide context for writing acceptance criteria. "
+            "Respond in markdown with these sections:\n"
+            "## User Personas\n"
+            "## Relevant Workflows\n"
+            "## Acceptance Criteria Patterns\n"
+            "## Domain Context"
         )
+
+        logger.debug("Barley prompt:\n%s", prompt)
 
         context = await self._barley_client.query(prompt)
 
         status = "received" if context else "unavailable"
+        if context:
+            logger.debug("Barley response:\n%s", context)
         logger.info("Barley enrichment completed (context %s)", status)
 
         return EnrichmentResult(barley_context=context, topics_extracted=topics)

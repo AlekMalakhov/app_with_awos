@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.ai.models import ACGenerationResult
 from src.database import ConversationState, ConversationStatus
 from src.jira.models import TicketData
 from src.slack.services.regeneration_service import ACRegenerationService
@@ -34,11 +35,16 @@ def mock_ac_generator() -> MagicMock:
     mock = MagicMock()
     mock.is_enabled = True
     mock.generate = AsyncMock(
-        return_value=[
-            "User can view the dashboard",
-            "Dashboard displays real-time data",
-            "User can refresh the dashboard manually",
-        ]
+        return_value=ACGenerationResult(
+            acceptance_criteria=[
+                "User can view the dashboard",
+                "Dashboard displays real-time data",
+                "User can refresh the dashboard manually",
+            ],
+            confidence_score=0.9,
+            confidence_gaps=[],
+            sufficient_information=True,
+        )
     )
     return mock
 
@@ -85,7 +91,60 @@ Use React for the frontend.
         description_adf={
             "type": "doc",
             "version": 1,
-            "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "As a user, I want to view a dashboard so I can see my metrics.",
+                        }
+                    ],
+                },
+                {
+                    "type": "heading",
+                    "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": "Acceptance Criteria"}],
+                },
+                {
+                    "type": "taskList",
+                    "attrs": {"localId": "ac-list-1"},
+                    "content": [
+                        {
+                            "type": "taskItem",
+                            "attrs": {"localId": "ac-1", "state": "TODO"},
+                            "content": [
+                                {"type": "text", "text": "Dashboard loads within 3 seconds"}
+                            ],
+                        },
+                        {
+                            "type": "taskItem",
+                            "attrs": {"localId": "ac-2", "state": "TODO"},
+                            "content": [
+                                {"type": "text", "text": "User can see total sales"}
+                            ],
+                        },
+                        {
+                            "type": "taskItem",
+                            "attrs": {"localId": "ac-3", "state": "TODO"},
+                            "content": [
+                                {"type": "text", "text": "User can filter by date range"}
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "type": "heading",
+                    "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": "Technical Notes"}],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Use React for the frontend."}
+                    ],
+                },
+            ],
         },
         issue_type="Story",
     )
@@ -411,7 +470,14 @@ class TestStartRegenerationEdgeCases:
     ) -> None:
         """Verify handling when AC generator returns empty list (insufficient info)."""
         mock_jira_client.get_ticket = AsyncMock(return_value=ticket_with_existing_acs)
-        mock_ac_generator.generate = AsyncMock(return_value=[])
+        mock_ac_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=[],
+                confidence_score=0.0,
+                confidence_gaps=["Insufficient information"],
+                sufficient_information=False,
+            )
+        )
 
         result = await service.start_regeneration(conversation, "PROJ-123")
 
@@ -753,7 +819,14 @@ class TestRegenerateWithFeedback:
             "Updated AC 2 with performance metrics",
             "Updated AC 3 with new requirement",
         ]
-        mock_ac_generator.generate = AsyncMock(return_value=new_acs)
+        mock_ac_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=new_acs,
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
+        )
 
         result = await service.regenerate_with_feedback(
             comparing_conversation, "Add error handling"

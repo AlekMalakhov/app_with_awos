@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from src.database.models import EscalationRecord
 from src.jira import JiraClient, JiraSettings, TicketData
 from src.jira.ac_formatter import append_acs_to_description, validate_acs
 
 if TYPE_CHECKING:
     from src.ai import ACGenerator
+    from src.ai.models import ACGenerationResult
     from src.barley.service import BarleyEnrichmentService
+    from src.database.repository import EscalationRepository
+    from src.slack.services.escalation_service import SlackEscalationService
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,9 @@ class PollingService:
         settings: JiraSettings,
         ac_generator: ACGenerator | None = None,
         enrichment_service: BarleyEnrichmentService | None = None,
+        escalation_service: SlackEscalationService | None = None,
+        escalation_repository: EscalationRepository | None = None,
+        confidence_threshold: float = 0.7,
     ) -> None:
         """Initialize the polling service.
 
@@ -39,11 +47,20 @@ class PollingService:
             ac_generator: Optional ACGenerator for AI-powered AC generation.
             enrichment_service: Optional BarleyEnrichmentService for enriching
                 ticket descriptions with project context before AC generation.
+            escalation_service: Optional SlackEscalationService for escalating
+                low-confidence ACs to a stakeholder via Slack DM.
+            escalation_repository: Optional EscalationRepository for persisting
+                escalation records to the database.
+            confidence_threshold: Minimum confidence score (0.0-1.0) required to
+                write ACs directly. Below this threshold, escalation is triggered.
         """
         self._client = jira_client
         self._settings = settings
         self._ac_generator = ac_generator
         self._enrichment_service = enrichment_service
+        self._escalation_service = escalation_service
+        self._escalation_repository = escalation_repository
+        self._confidence_threshold = confidence_threshold
         self._failure_counts: dict[str, int] = {}  # In-memory failure tracking
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -137,13 +154,17 @@ class PollingService:
         return (
             f"project = {self._settings.project_key} "
             f"AND issuetype in ({self._settings.issue_types}) "
-            f'AND labels not in ("ac-generated", "ac-generation-failed", "regenerating") '
+            f'AND (labels is EMPTY OR labels not in ("ac-generated", "ac-generation-failed", "regenerating")) '
             f"AND created >= -{self._settings.polling_lookback_days}d "
             f"ORDER BY created ASC"
         )
 
     def _has_existing_acs(self, description: str) -> bool:
-        """Check if description already contains an '## Acceptance Criteria' section.
+        """Check if description already contains an Acceptance Criteria section.
+
+        Checks for both markdown-formatted ACs (## Acceptance Criteria) and
+        plain-text ACs extracted from Jira's ADF format (Acceptance Criteria
+        without the ## prefix).
 
         Args:
             description: The ticket description text
@@ -153,8 +174,7 @@ class PollingService:
         """
         if not description:
             return False
-        # Case-insensitive check for "## Acceptance Criteria" or similar patterns
-        return "## acceptance criteria" in description.lower()
+        return "acceptance criteria" in description.lower()
 
     def _record_failure(self, ticket_key: str) -> int:
         """Record a failure and return the new failure count.
@@ -236,10 +256,11 @@ class PollingService:
             logger.warning("AI generation disabled, skipping %s", ticket.key)
             return False
 
-        generated_acs = await self._ac_generator.generate(
+        result = await self._ac_generator.generate(
             summary=ticket.summary,
             description=enriched_description,
         )
+        generated_acs = result.acceptance_criteria
 
         if not generated_acs:
             logger.warning(
@@ -253,20 +274,34 @@ class PollingService:
             logger.warning("No valid ACs to write for %s", ticket.key)
             return False
 
-        # 3. Get current ticket with description_adf
+        # 3. Confidence check: escalate if below threshold
+        is_low_confidence = (
+            result.confidence_score < self._confidence_threshold
+            and self._escalation_service is not None
+        )
+
+        if is_low_confidence:
+            generated_acs = await self._handle_low_confidence(
+                ticket_key=ticket.key,
+                summary=ticket.summary,
+                result=result,
+                generated_acs=generated_acs,
+            )
+
+        # 4. Get current ticket with description_adf
         try:
             current_ticket = await self._client.get_ticket(ticket.key)
         except Exception as e:
             logger.error("Failed to fetch ticket %s for AC write: %s", ticket.key, e)
             return False
 
-        # 4. Format and append ACs to existing description
+        # 5. Format and append ACs to existing description
         updated_description = append_acs_to_description(
             existing_adf=current_ticket.description_adf,
             new_acs=generated_acs,
         )
 
-        # 5. Write back to Jira
+        # 6. Write back to Jira
         if updated_description:
             ac_generation_success = await self._client.update_description(
                 ticket.key, updated_description
@@ -307,3 +342,77 @@ class PollingService:
             logger.warning("Processed %s but failed to add label", ticket.key)
 
         return True
+
+    async def _handle_low_confidence(
+        self,
+        ticket_key: str,
+        summary: str,
+        result: ACGenerationResult,
+        generated_acs: list[str],
+    ) -> list[str]:
+        """Handle low-confidence AC generation by escalating via Slack.
+
+        Sends an escalation DM to the configured stakeholder, records the
+        escalation in the database, and prepends an appropriate note to the
+        generated ACs before they are written to Jira.
+
+        Args:
+            ticket_key: The Jira ticket key (e.g., "PROJ-123").
+            summary: The ticket summary / title.
+            result: The full ACGenerationResult from the AI generator.
+            generated_acs: The list of generated AC strings.
+
+        Returns:
+            A new list of AC strings with a note/warning prepended at index 0.
+        """
+        # Build the Jira ticket URL
+        ticket_url = f"{self._settings.base_url}/browse/{ticket_key}"
+
+        logger.info(
+            "Low confidence (%.2f < %.2f) for %s, escalating via Slack",
+            result.confidence_score,
+            self._confidence_threshold,
+            ticket_key,
+        )
+
+        # Send escalation DM
+        escalation_result = await self._escalation_service.escalate(
+            ticket_key, summary, ticket_url, result.confidence_gaps
+        )
+
+        # Record escalation in the database
+        if self._escalation_repository:
+            record = EscalationRecord(
+                id=str(uuid.uuid4()),
+                jira_ticket_key=ticket_key,
+                confidence_score=result.confidence_score,
+                confidence_gaps=result.confidence_gaps,
+                slack_user_id=escalation_result.slack_user_id,
+                status="SENT" if escalation_result.sent else "FAILED",
+                error_message=escalation_result.error,
+            )
+            self._escalation_repository.create(record)
+
+        # Prepend note/warning to the ACs
+        if escalation_result.sent:
+            note = (
+                "Note: Clarification has been requested from the Product "
+                "Owner. Please review the following draft acceptance criteria."
+            )
+            logger.info(
+                "Escalation sent for %s, writing draft ACs with note",
+                ticket_key,
+            )
+        else:
+            note = (
+                "Note: The system attempted to contact the Product Owner for "
+                "clarification on the items below, but the message could not "
+                "be delivered. Please review these ACs manually."
+            )
+            logger.warning(
+                "Escalation failed for %s (%s), writing draft ACs with warning",
+                ticket_key,
+                escalation_result.error,
+            )
+
+        return [note, *generated_acs]

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.ai.models import ACGenerationResult
 from src.barley.client import BarleyClient
 from src.barley.config import BarleySettings
 from src.barley.service import BarleyEnrichmentService
@@ -115,7 +116,12 @@ def _build_mock_ac_generator() -> MagicMock:
     """
     mock = MagicMock()
     mock.is_enabled = True
-    mock.generate = AsyncMock(return_value=GENERATED_ACS)
+    mock.generate = AsyncMock(return_value=ACGenerationResult(
+        acceptance_criteria=GENERATED_ACS,
+        confidence_score=0.85,
+        confidence_gaps=[],
+        sufficient_information=True,
+    ))
     mock.extract_topics = AsyncMock(
         return_value="OAuth2, authentication, Google, GitHub identity providers"
     )

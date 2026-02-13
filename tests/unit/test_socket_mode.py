@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.slack.config import SlackSettings
+from src.slack.handlers.dm_handler import DMResponse
 from src.slack.socket_mode import (
     DEFAULT_SUGGESTED_PROMPTS,
     DEFAULT_WELCOME_MESSAGE,
@@ -445,7 +446,7 @@ class TestMessageHandler:
             with patch.object(
                 service, "_process_message", new_callable=AsyncMock
             ) as mock_process:
-                mock_process.return_value = "Test response"
+                mock_process.return_value = DMResponse(text="Test response")
 
                 handler = handlers.get("message")
                 event = {
@@ -491,7 +492,7 @@ class TestMessageHandler:
             with patch.object(
                 service, "_process_message", new_callable=AsyncMock
             ) as mock_process:
-                mock_process.return_value = "Test response"
+                mock_process.return_value = DMResponse(text="Test response")
 
                 handler = handlers.get("message")
                 event = {

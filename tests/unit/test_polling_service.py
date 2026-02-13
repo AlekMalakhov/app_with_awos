@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.ai.models import ACGenerationResult
+from src.database.models import EscalationRecord
 from src.jira import JiraClient, JiraSettings
 from src.jira.models import TicketData
 from src.polling.service import PollingService
@@ -298,7 +300,7 @@ class TestPollingServiceBuildJql:
         expected_jql = (
             "project = ABC "
             "AND issuetype in (Story) "
-            'AND labels not in ("ac-generated", "ac-generation-failed", "regenerating") '
+            'AND (labels is EMPTY OR labels not in ("ac-generated", "ac-generation-failed", "regenerating")) '
             "AND created >= -30d "
             "ORDER BY created ASC"
         )
@@ -532,11 +534,16 @@ class TestPollingServicePrerequisiteValidation:
         mock = MagicMock()
         mock.is_enabled = True
         mock.generate = AsyncMock(
-            return_value=[
-                "User can perform the described action",
-                "System responds within acceptable time limits",
-                "Error states are handled gracefully",
-            ]
+            return_value=ACGenerationResult(
+                acceptance_criteria=[
+                    "User can perform the described action",
+                    "System responds within acceptable time limits",
+                    "Error states are handled gracefully",
+                ],
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
         )
         return mock
 
@@ -570,11 +577,21 @@ class TestPollingServicePrerequisiteValidation:
         self, service: PollingService
     ) -> None:
         """Verify _has_existing_acs returns False when description has no AC section."""
-        description = "A simple ticket description without any acceptance criteria section."
+        description = "A simple ticket description without any AC section."
 
         result = service._has_existing_acs(description)
 
         assert result is False
+
+    def test_prerequisite_has_existing_acs_returns_true_for_plain_text_acs(
+        self, service: PollingService
+    ) -> None:
+        """Verify _has_existing_acs returns True for ACs from Jira's ADF (no ## prefix)."""
+        description = "Some description Acceptance Criteria Criterion 1 Criterion 2"
+
+        result = service._has_existing_acs(description)
+
+        assert result is True
 
     def test_prerequisite_has_existing_acs_is_case_insensitive(
         self, service: PollingService
@@ -701,11 +718,16 @@ class TestPollingServiceSuccessFlow:
         mock = MagicMock()
         mock.is_enabled = True
         mock.generate = AsyncMock(
-            return_value=[
-                "User can perform the described action",
-                "System responds within acceptable time limits",
-                "Error states are handled gracefully",
-            ]
+            return_value=ACGenerationResult(
+                acceptance_criteria=[
+                    "User can perform the described action",
+                    "System responds within acceptable time limits",
+                    "Error states are handled gracefully",
+                ],
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
         )
         return mock
 
@@ -859,11 +881,16 @@ class TestPollingServiceFailureTracking:
         mock = MagicMock()
         mock.is_enabled = True
         mock.generate = AsyncMock(
-            return_value=[
-                "User can perform the described action",
-                "System responds within acceptable time limits",
-                "Error states are handled gracefully",
-            ]
+            return_value=ACGenerationResult(
+                acceptance_criteria=[
+                    "User can perform the described action",
+                    "System responds within acceptable time limits",
+                    "Error states are handled gracefully",
+                ],
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
         )
         return mock
 
@@ -1170,11 +1197,16 @@ class TestPollingServiceACGeneratorIntegration:
         mock = MagicMock()
         mock.is_enabled = True
         mock.generate = AsyncMock(
-            return_value=[
-                "User can perform the described action",
-                "System responds within acceptable time limits",
-                "Error states are handled gracefully",
-            ]
+            return_value=ACGenerationResult(
+                acceptance_criteria=[
+                    "User can perform the described action",
+                    "System responds within acceptable time limits",
+                    "Error states are handled gracefully",
+                ],
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
         )
         return mock
 
@@ -1300,7 +1332,14 @@ class TestPollingServiceACGeneratorIntegration:
         """Verify _process_ticket returns False when ac_generator.generate() returns []."""
         mock_generator = MagicMock()
         mock_generator.is_enabled = True
-        mock_generator.generate = AsyncMock(return_value=[])  # Empty list = insufficient info
+        mock_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=[],
+                confidence_score=0.0,
+                confidence_gaps=["Insufficient information"],
+                sufficient_information=False,
+            )
+        )  # Empty list = insufficient info
 
         service = PollingService(
             jira_client=mock_jira_client,
@@ -1329,7 +1368,14 @@ class TestPollingServiceACGeneratorIntegration:
 
         mock_generator = MagicMock()
         mock_generator.is_enabled = True
-        mock_generator.generate = AsyncMock(return_value=[])
+        mock_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=[],
+                confidence_score=0.0,
+                confidence_gaps=["Insufficient information"],
+                sufficient_information=False,
+            )
+        )
 
         service = PollingService(
             jira_client=mock_jira_client,
@@ -1478,11 +1524,16 @@ class TestPollingServiceBarleyEnrichment:
         mock = MagicMock()
         mock.is_enabled = True
         mock.generate = AsyncMock(
-            return_value=[
-                "User can perform the described action",
-                "System responds within acceptable time limits",
-                "Error states are handled gracefully",
-            ]
+            return_value=ACGenerationResult(
+                acceptance_criteria=[
+                    "User can perform the described action",
+                    "System responds within acceptable time limits",
+                    "Error states are handled gracefully",
+                ],
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
         )
         return mock
 
@@ -1656,3 +1707,320 @@ class TestPollingServiceBarleyEnrichment:
 
         # Verify add_comment was NOT called (enrichment failed)
         mock_jira_client.add_comment.assert_not_called()
+
+
+class TestPollingServiceConfidenceEscalation:
+    """Test suite for confidence-based escalation logic in _process_ticket."""
+
+    @pytest.fixture
+    def mock_jira_client(self) -> MagicMock:
+        """Create a mock JiraClient for confidence escalation tests."""
+        return MagicMock(spec=JiraClient)
+
+    @pytest.fixture
+    def mock_jira_settings(self) -> JiraSettings:
+        """Create mock JiraSettings for confidence escalation tests."""
+        return JiraSettings(
+            base_url="https://test.atlassian.net",
+            user_email="test@example.com",
+            api_token="test-api-token",
+            project_key="TEST",
+            polling_enabled=True,
+            polling_interval_seconds=1,
+            polling_lookback_days=7,
+            polling_max_failures=3,
+        )
+
+    @pytest.fixture
+    def valid_ticket(self) -> TicketData:
+        """Create a valid ticket that passes prerequisite checks."""
+        return TicketData(
+            key="TEST-600",
+            summary="Ticket needing confidence check",
+            description="As a user, I want to test confidence escalation.",
+            issue_type="Story",
+        )
+
+    @pytest.fixture
+    def mock_escalation_service(self) -> MagicMock:
+        """Create a mock SlackEscalationService."""
+        from src.slack.models import EscalationResult
+
+        mock = MagicMock()
+        mock.escalate = AsyncMock(
+            return_value=EscalationResult(sent=True, slack_user_id="U12345"),
+        )
+        return mock
+
+    @pytest.fixture
+    def mock_escalation_repository(self) -> MagicMock:
+        """Create a mock EscalationRepository."""
+        mock = MagicMock()
+        mock.create = MagicMock()
+        return mock
+
+    # --- Test 1: High confidence, no escalation ---
+
+    @pytest.mark.asyncio
+    async def test_high_confidence_skips_escalation(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_escalation_service: MagicMock,
+        mock_escalation_repository: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify escalation is NOT triggered when confidence is above threshold.
+
+        Given confidence_score=0.9 (above default threshold 0.7)
+        When _process_ticket is called
+        Then escalation_service.escalate() is NOT called
+        And ACs are written directly without any prepended note.
+        """
+        mock_ac_generator = MagicMock()
+        mock_ac_generator.is_enabled = True
+        generated_acs = [
+            "User can perform the described action",
+            "System responds within acceptable time limits",
+        ]
+        mock_ac_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=generated_acs,
+                confidence_score=0.9,
+                confidence_gaps=[],
+                sufficient_information=True,
+            )
+        )
+
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            escalation_service=mock_escalation_service,
+            escalation_repository=mock_escalation_repository,
+            confidence_threshold=0.7,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Escalation should NOT have been called
+        mock_escalation_service.escalate.assert_not_called()
+        mock_escalation_repository.create.assert_not_called()
+
+        # update_description should have been called (ACs written directly)
+        mock_jira_client.update_description.assert_called_once()
+
+    # --- Test 2: Low confidence + DM sent successfully ---
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_escalation_sent_successfully(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_escalation_service: MagicMock,
+        mock_escalation_repository: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify escalation is triggered and recorded when confidence is below threshold.
+
+        Given confidence_score=0.4 (below default threshold 0.7)
+        And escalation_service.escalate() returns EscalationResult(sent=True)
+        When _process_ticket is called
+        Then escalation_service.escalate() IS called with correct args
+        And escalation_repository.create() is called with status="SENT"
+        And ACs written to Jira include the "clarification requested" note.
+        """
+        from src.slack.models import EscalationResult
+
+        confidence_gaps = ["unclear user role", "missing error handling"]
+        generated_acs = [
+            "User can perform the described action",
+            "System responds within acceptable time limits",
+        ]
+        mock_ac_generator = MagicMock()
+        mock_ac_generator.is_enabled = True
+        mock_ac_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=generated_acs,
+                confidence_score=0.4,
+                confidence_gaps=confidence_gaps,
+                sufficient_information=True,
+            )
+        )
+
+        mock_escalation_service.escalate = AsyncMock(
+            return_value=EscalationResult(sent=True, slack_user_id="U12345"),
+        )
+
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            escalation_service=mock_escalation_service,
+            escalation_repository=mock_escalation_repository,
+            confidence_threshold=0.7,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Verify escalation was called with correct arguments
+        expected_url = f"{mock_jira_settings.base_url}/browse/{valid_ticket.key}"
+        mock_escalation_service.escalate.assert_called_once_with(
+            valid_ticket.key,
+            valid_ticket.summary,
+            expected_url,
+            confidence_gaps,
+        )
+
+        # Verify escalation record was created with status="SENT"
+        mock_escalation_repository.create.assert_called_once()
+        created_record = mock_escalation_repository.create.call_args[0][0]
+        assert isinstance(created_record, EscalationRecord)
+        assert created_record.jira_ticket_key == valid_ticket.key
+        assert created_record.confidence_score == 0.4
+        assert created_record.confidence_gaps == confidence_gaps
+        assert created_record.slack_user_id == "U12345"
+        assert created_record.status == "SENT"
+        assert created_record.error_message is None
+
+        # Verify update_description was called (ACs were written)
+        mock_jira_client.update_description.assert_called_once()
+
+    # --- Test 3: Low confidence + DM failed ---
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_escalation_failed(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        mock_escalation_service: MagicMock,
+        mock_escalation_repository: MagicMock,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify escalation failure is recorded and warning note is prepended.
+
+        Given confidence_score=0.3 (below threshold)
+        And escalation_service.escalate() returns EscalationResult(sent=False, error="User not found")
+        When _process_ticket is called
+        Then escalation_repository.create() is called with status="FAILED" and the error
+        And ACs written to Jira include the "could not be delivered" warning.
+        """
+        from src.slack.models import EscalationResult
+
+        generated_acs = [
+            "User can perform the described action",
+            "System responds within acceptable time limits",
+        ]
+        mock_ac_generator = MagicMock()
+        mock_ac_generator.is_enabled = True
+        mock_ac_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=generated_acs,
+                confidence_score=0.3,
+                confidence_gaps=["unclear requirements"],
+                sufficient_information=True,
+            )
+        )
+
+        mock_escalation_service.escalate = AsyncMock(
+            return_value=EscalationResult(
+                sent=False, error="User not found"
+            ),
+        )
+
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            escalation_service=mock_escalation_service,
+            escalation_repository=mock_escalation_repository,
+            confidence_threshold=0.7,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # Verify escalation was attempted
+        mock_escalation_service.escalate.assert_called_once()
+
+        # Verify escalation record was created with status="FAILED"
+        mock_escalation_repository.create.assert_called_once()
+        created_record = mock_escalation_repository.create.call_args[0][0]
+        assert isinstance(created_record, EscalationRecord)
+        assert created_record.status == "FAILED"
+        assert created_record.error_message == "User not found"
+
+        # Verify update_description was called (ACs still written with warning)
+        mock_jira_client.update_description.assert_called_once()
+
+    # --- Test 4: No escalation service configured (backward compatibility) ---
+
+    @pytest.mark.asyncio
+    async def test_no_escalation_service_writes_acs_directly(
+        self,
+        mock_jira_client: MagicMock,
+        mock_jira_settings: JiraSettings,
+        valid_ticket: TicketData,
+    ) -> None:
+        """Verify backward compatibility when no escalation service is configured.
+
+        Given escalation_service is None (not provided)
+        And confidence_score is below threshold (0.4)
+        When _process_ticket is called
+        Then ACs are written directly to Jira without any escalation attempt
+        And no error is raised.
+        """
+        generated_acs = [
+            "User can perform the described action",
+            "System responds within acceptable time limits",
+        ]
+        mock_ac_generator = MagicMock()
+        mock_ac_generator.is_enabled = True
+        mock_ac_generator.generate = AsyncMock(
+            return_value=ACGenerationResult(
+                acceptance_criteria=generated_acs,
+                confidence_score=0.4,
+                confidence_gaps=["unclear scope"],
+                sufficient_information=True,
+            )
+        )
+
+        mock_jira_client.get_ticket = AsyncMock(return_value=valid_ticket)
+        mock_jira_client.update_description = AsyncMock(return_value=True)
+        mock_jira_client.add_label = AsyncMock(return_value=True)
+
+        # No escalation_service provided (default None)
+        service = PollingService(
+            jira_client=mock_jira_client,
+            settings=mock_jira_settings,
+            ac_generator=mock_ac_generator,
+            escalation_service=None,
+        )
+
+        result = await service._process_ticket(valid_ticket)
+
+        assert result is True
+
+        # update_description should have been called (ACs written directly)
+        mock_jira_client.update_description.assert_called_once()
+
+        # No escalation should have been attempted (no service configured)
+        # This is verified implicitly: if escalation_service were called,
+        # it would raise AttributeError on None

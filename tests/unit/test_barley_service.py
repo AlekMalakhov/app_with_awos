@@ -16,6 +16,7 @@ def mock_barley_settings() -> MagicMock:
     """Create a mock BarleySettings with Barley enabled by default."""
     settings = MagicMock(spec=BarleySettings)
     settings.enabled = True
+    settings.project_name = "IGAL"
     return settings
 
 
@@ -148,7 +149,7 @@ class TestBarleyEnrichmentServiceEnrich:
         assert result.topics_extracted == raw_description
         assert result.barley_context == "Relevant project context from Barley"
 
-        # Barley should have been called with a prompt containing the fallback text
+        # Barley should have been called with a prompt containing the summary
         mock_barley_client.query.assert_called_once()
         call_args = mock_barley_client.query.call_args[0][0]
-        assert raw_description in call_args
+        assert "Add OAuth2 login" in call_args

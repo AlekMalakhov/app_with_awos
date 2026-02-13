@@ -28,7 +28,7 @@ from src.database import ConversationRepository
 from src.jira import JiraClient, JiraSettings
 from src.slack.client import SlackClient
 from src.slack.config import SlackSettings
-from src.slack.handlers.dm_handler import DMHandler
+from src.slack.handlers.dm_handler import DMHandler, DMResponse
 from src.slack.handlers.intent_classifier import IntentClassifier
 from src.slack.services.regeneration_service import ACRegenerationService
 
@@ -69,14 +69,18 @@ class SlackSocketModeService:
         _running: Flag indicating if the service is currently running.
     """
 
-    def __init__(self, settings: SlackSettings) -> None:
+    def __init__(self, settings: SlackSettings, bot_user_id: str | None = None) -> None:
         """Initialize the Socket Mode service.
 
         Args:
             settings: SlackSettings containing bot_token and app_token.
+            bot_user_id: The bot's own Slack user ID (used to filter out
+                self-messages and prevent loops). If None, falls back to
+                filtering on bot_id field.
         """
         self._settings = settings
         self._running = False
+        self._bot_user_id = bot_user_id
 
         # Create the Bolt app with bot token
         self._app = AsyncApp(token=settings.bot_token)
@@ -208,13 +212,18 @@ class SlackSocketModeService:
                 set_status: Optional function to set assistant status (available
                     in assistant threads).
             """
-            # Ignore bot messages to prevent loops
-            if event.get("bot_id") or event.get("subtype"):
+            # Ignore subtype messages (e.g., message_changed, bot_message)
+            # and messages from our own bot user to prevent loops
+            if event.get("subtype"):
                 logger.debug(
-                    "Ignoring bot/subtype message: bot_id=%s, subtype=%s",
-                    event.get("bot_id"),
+                    "Ignoring subtype message: subtype=%s",
                     event.get("subtype"),
                 )
+                return
+
+            # Ignore messages from our own bot (prevent loops)
+            if event.get("user") == self._bot_user_id:
+                logger.debug("Ignoring message from our own bot user")
                 return
 
             user_id = event.get("user")
@@ -248,7 +257,9 @@ class SlackSocketModeService:
             # Set status if in assistant thread and set_status is available
             if set_status is not None:
                 try:
-                    set_status("is thinking...")
+                    result = set_status("is thinking...")
+                    if asyncio.iscoroutine(result):
+                        await result
                 except Exception as e:
                     logger.debug("Could not set status: %s", e)
 
@@ -258,7 +269,10 @@ class SlackSocketModeService:
             )
 
             if response:
-                await say(text=response)
+                say_kwargs: dict = {"text": response.text}
+                if response.thread_ts is not None:
+                    say_kwargs["thread_ts"] = response.thread_ts
+                await say(**say_kwargs)
 
     async def _process_message(
         self,
@@ -266,7 +280,7 @@ class SlackSocketModeService:
         channel_id: str,
         text: str,
         event_ts: str | None = None,
-    ) -> str | None:
+    ) -> DMResponse | None:
         """Process a DM message using the DMHandler.
 
         Creates all necessary dependencies, processes the message, and returns
@@ -279,7 +293,7 @@ class SlackSocketModeService:
             event_ts: Optional Slack event timestamp for deduplication.
 
         Returns:
-            Response message to send back, or None if no response needed.
+            DMResponse with text and thread_ts, or None if no response needed.
         """
         repository = ConversationRepository()
         slack_client = SlackClient(self._settings)

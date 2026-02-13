@@ -19,6 +19,7 @@ def slack_settings() -> SlackSettings:
     """
     return SlackSettings(
         bot_token="xoxb-test-token-12345",
+        app_token="xapp-test-token",
         signing_secret="test-signing-secret",
         max_retries=1,
     )
@@ -29,6 +30,7 @@ def slack_settings_with_retries() -> SlackSettings:
     """Create SlackSettings with retry logic enabled (max_retries=3)."""
     return SlackSettings(
         bot_token="xoxb-test-token-12345",
+        app_token="xapp-test-token",
         signing_secret="test-signing-secret",
         max_retries=3,
     )
@@ -528,5 +530,148 @@ class TestSlackClientDMMessages:
             payload = json.loads(requests[0].content)
             assert payload["channel"] == "D0987654321"
             assert payload["text"] == "Hello! This is a direct message."
+        finally:
+            await client.close()
+
+
+class TestSlackClientLookupUserByEmail:
+    """Test suite for SlackClient.lookup_user_by_email() method."""
+
+    @pytest.mark.asyncio
+    async def test_user_found_returns_user_id(
+        self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
+    ):
+        """Test that lookup_user_by_email returns user ID when user is found."""
+        httpx_mock.add_response(
+            url="https://slack.com/api/users.lookupByEmail?email=alice%40example.com",
+            method="GET",
+            status_code=200,
+            json={"ok": True, "user": {"id": "U12345"}},
+        )
+
+        client = SlackClient(slack_settings)
+        try:
+            result = await client.lookup_user_by_email("alice@example.com")
+            assert result == "U12345"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_user_not_found_returns_none(
+        self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
+    ):
+        """Test that lookup_user_by_email returns None when user is not found."""
+        httpx_mock.add_response(
+            url="https://slack.com/api/users.lookupByEmail?email=unknown%40example.com",
+            method="GET",
+            status_code=200,
+            json={"ok": False, "error": "user_not_found"},
+        )
+
+        client = SlackClient(slack_settings)
+        try:
+            result = await client.lookup_user_by_email("unknown@example.com")
+            assert result is None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_none(
+        self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
+    ):
+        """Test that lookup_user_by_email returns None on API auth error."""
+        httpx_mock.add_response(
+            url="https://slack.com/api/users.lookupByEmail?email=alice%40example.com",
+            method="GET",
+            status_code=200,
+            json={"ok": False, "error": "invalid_auth"},
+        )
+
+        client = SlackClient(slack_settings)
+        try:
+            result = await client.lookup_user_by_email("alice@example.com")
+            assert result is None
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_none(
+        self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
+    ):
+        """Test that lookup_user_by_email returns None on network error."""
+        httpx_mock.add_exception(
+            httpx.ConnectError("Connection refused"),
+            url="https://slack.com/api/users.lookupByEmail?email=alice%40example.com",
+            method="GET",
+        )
+
+        client = SlackClient(slack_settings)
+        try:
+            result = await client.lookup_user_by_email("alice@example.com")
+            assert result is None
+        finally:
+            await client.close()
+
+
+class TestSlackClientSendBlocksMessage:
+    """Test suite for SlackClient.send_blocks_message() method."""
+
+    @pytest.mark.asyncio
+    async def test_successful_blocks_message_returns_true(
+        self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
+    ):
+        """Test that send_blocks_message returns True on success and sends correct payload."""
+        httpx_mock.add_response(
+            url="https://slack.com/api/chat.postMessage",
+            method="POST",
+            status_code=200,
+            json={"ok": True, "channel": "D123", "ts": "123.456"},
+        )
+
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Hello *world*"}},
+        ]
+
+        client = SlackClient(slack_settings)
+        try:
+            result = await client.send_blocks_message(
+                "D123", blocks, "Hello world"
+            )
+            assert result is True
+
+            requests = httpx_mock.get_requests()
+            assert len(requests) == 1
+
+            import json
+
+            payload = json.loads(requests[0].content)
+            assert payload["channel"] == "D123"
+            assert payload["blocks"] == blocks
+            assert payload["text"] == "Hello world"
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_false(
+        self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
+    ):
+        """Test that send_blocks_message returns False on API error."""
+        httpx_mock.add_response(
+            url="https://slack.com/api/chat.postMessage",
+            method="POST",
+            status_code=200,
+            json={"ok": False, "error": "channel_not_found"},
+        )
+
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Hello"}},
+        ]
+
+        client = SlackClient(slack_settings)
+        try:
+            result = await client.send_blocks_message(
+                "C0000000000", blocks, "Hello"
+            )
+            assert result is False
         finally:
             await client.close()

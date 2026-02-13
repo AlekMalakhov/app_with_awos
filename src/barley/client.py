@@ -1,5 +1,6 @@
 """Barley API client for AI-powered chat completions."""
 
+import asyncio
 import logging
 
 import httpx
@@ -51,7 +52,8 @@ class BarleyClient:
         """Send a prompt to Barley and return the generated response.
 
         Sends a chat completion request with the given prompt and extracts
-        the response content. On any failure, logs the error and returns None.
+        the response content. Retries on 5xx errors and timeouts up to
+        max_retries times. On permanent failure, logs the error and returns None.
 
         Args:
             prompt: The user prompt to send to the model.
@@ -59,64 +61,82 @@ class BarleyClient:
         Returns:
             The generated text response, or None if the request failed.
         """
-        try:
-            response = await self._client.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "anth",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                    "max_tokens": 3000,
-                },
-            )
-
-            if response.status_code in (401, 403):
-                raise BarleyAuthenticationError(
-                    f"Authentication failed with status {response.status_code}"
+        max_attempts = self._settings.max_retries + 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = await self._client.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "anth",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.3,
+                        "max_tokens": 1500,
+                    },
                 )
 
-            if response.status_code >= 500:
-                raise BarleyConnectionError(
-                    f"Server error from Barley: {response.status_code}"
-                )
+                if response.status_code in (401, 403):
+                    raise BarleyAuthenticationError(
+                        f"Authentication failed with status {response.status_code}"
+                    )
 
-            if response.status_code != 200:
-                raise BarleyError(
-                    f"Unexpected response from Barley: {response.status_code} - "
-                    f"{response.text}"
-                )
+                if response.status_code >= 500:
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "Barley returned %d (attempt %d/%d), retrying...",
+                            response.status_code,
+                            attempt,
+                            max_attempts,
+                        )
+                        await asyncio.sleep(2 * attempt)
+                        continue
+                    raise BarleyConnectionError(
+                        f"Server error from Barley: {response.status_code}"
+                    )
 
-            data = response.json()
-            choices = data.get("choices", [])
-            if not choices:
-                logger.error("Barley response contains no choices")
+                if response.status_code != 200:
+                    raise BarleyError(
+                        f"Unexpected response from Barley: {response.status_code} - "
+                        f"{response.text}"
+                    )
+
+                data = response.json()
+                choices = data.get("choices", [])
+                if not choices:
+                    logger.error("Barley response contains no choices")
+                    return None
+
+                content = choices[0].get("message", {}).get("content")
+                if content is None:
+                    logger.error("Barley response choice has no message content")
+                    return None
+
+                return content
+
+            except BarleyAuthenticationError as e:
+                logger.error("Barley authentication error: %s", e)
                 return None
-
-            content = choices[0].get("message", {}).get("content")
-            if content is None:
-                logger.error("Barley response choice has no message content")
+            except BarleyConnectionError as e:
+                logger.error("Barley connection error: %s", e)
                 return None
-
-            return content
-
-        except BarleyAuthenticationError as e:
-            logger.error("Barley authentication error: %s", e)
-            return None
-        except BarleyConnectionError as e:
-            logger.error("Barley connection error: %s", e)
-            return None
-        except BarleyError as e:
-            logger.error("Barley API error: %s", e)
-            return None
-        except httpx.TimeoutException as e:
-            logger.error("Request to Barley timed out: %s", e)
-            return None
-        except httpx.RequestError as e:
-            logger.error("Failed to connect to Barley: %s", e)
-            return None
-        except Exception as e:
-            logger.error("Unexpected error querying Barley: %s", e)
-            return None
+            except BarleyError as e:
+                logger.error("Barley API error: %s", e)
+                return None
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt < max_attempts:
+                    logger.warning(
+                        "Barley request failed (attempt %d/%d): %s, retrying...",
+                        attempt,
+                        max_attempts,
+                        e,
+                    )
+                    await asyncio.sleep(2 * attempt)
+                    continue
+                logger.error("Barley request failed after %d attempts: %s", max_attempts, e)
+                return None
+            except Exception as e:
+                logger.error("Unexpected error querying Barley: %s", e)
+                return None
+        return None
 
     async def close(self) -> None:
         """Close the underlying HTTP client connection."""

@@ -148,7 +148,9 @@ async def _process_dm_message(
 
         if response:
             try:
-                await slack_client.send_message(channel_id, response)
+                await slack_client.send_message(
+                    channel_id, response.text, thread_ts=response.thread_ts
+                )
             except Exception as e:
                 logger.error(
                     "Failed to send response to channel %s: %s",
@@ -232,11 +234,10 @@ async def slack_events(
     if payload.type == "event_callback" and payload.event:
         event = payload.event
 
-        # Ignore bot messages to prevent potential loops
-        if event.bot_id or event.subtype:
+        # Ignore subtype messages (e.g., message_changed, bot_message)
+        if event.subtype:
             logger.debug(
-                "Ignoring bot/subtype message: bot_id=%s, subtype=%s",
-                event.bot_id,
+                "Ignoring subtype message: subtype=%s",
                 event.subtype,
             )
             return {"ok": True}

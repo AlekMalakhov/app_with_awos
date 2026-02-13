@@ -8,9 +8,11 @@ from src.ai.exceptions import (
     AIRateLimitError,
 )
 from src.ai.generator import ACGenerator
+from src.ai.models import ACGenerationResult
 
 __all__ = [
     "ACGenerator",
+    "ACGenerationResult",
     "AISettings",
     "AIError",
     "AIConfigurationError",

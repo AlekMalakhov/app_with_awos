@@ -20,6 +20,7 @@ from src.slack.handlers.dm_handler import (
     MAX_MESSAGE_LENGTH,
     TICKET_KEY_PATTERN,
     DMHandler,
+    DMResponse,
     format_comparison,
 )
 from src.slack.handlers.intent_classifier import Intent, IntentResult
@@ -129,7 +130,7 @@ class TestDMHandlerTicketExtraction:
             text="PROJ-123",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_handle_message_extracts_ticket_from_longer_message(
@@ -142,7 +143,7 @@ class TestDMHandlerTicketExtraction:
             text="regenerate ACs for PROJ-123 please",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_handle_message_uses_first_ticket_key(self, dm_handler):
@@ -153,7 +154,7 @@ class TestDMHandlerTicketExtraction:
             text="compare PROJ-123 with ABC-456",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
 
 class TestDMHandlerNoTicketKey:
@@ -170,7 +171,7 @@ class TestDMHandlerNoTicketKey:
             text="hello",
         )
 
-        assert response == "Please provide a Jira ticket key (e.g., PROJ-123)"
+        assert response.text == "Please provide a Jira ticket key (e.g., PROJ-123)"
 
     @pytest.mark.asyncio
     async def test_no_ticket_key_awaiting_ticket_returns_prompt(
@@ -192,7 +193,7 @@ class TestDMHandlerNoTicketKey:
             text="what's the status?",
         )
 
-        assert response == "Please provide a Jira ticket key (e.g., PROJ-123)"
+        assert response.text == "Please provide a Jira ticket key (e.g., PROJ-123)"
 
     @pytest.mark.asyncio
     async def test_no_ticket_key_active_comparing_returns_none(
@@ -226,7 +227,7 @@ class TestDMHandlerNoTicketKey:
             text="",
         )
 
-        assert response == "Please provide a Jira ticket key (e.g., PROJ-123)"
+        assert response.text == "Please provide a Jira ticket key (e.g., PROJ-123)"
 
 
 class TestDMHandlerConversationCreation:
@@ -339,7 +340,7 @@ class TestDMHandlerEdgeCases:
             text="PROJ-123 needs ACs generated",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_ticket_key_at_end_of_message(self, dm_handler):
@@ -350,7 +351,7 @@ class TestDMHandlerEdgeCases:
             text="generate ACs for PROJ-123",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_ticket_key_surrounded_by_punctuation(self, dm_handler):
@@ -361,7 +362,7 @@ class TestDMHandlerEdgeCases:
             text="check (PROJ-123) now!",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_whitespace_only_message_returns_prompt(self, dm_handler):
@@ -372,7 +373,7 @@ class TestDMHandlerEdgeCases:
             text="   ",
         )
 
-        assert response == "Please provide a Jira ticket key (e.g., PROJ-123)"
+        assert response.text == "Please provide a Jira ticket key (e.g., PROJ-123)"
 
     @pytest.mark.asyncio
     async def test_different_users_have_separate_conversations(
@@ -394,7 +395,7 @@ class TestDMHandlerEdgeCases:
         )
 
         # User 2 should be prompted (no active conversation for them)
-        assert response == "Please provide a Jira ticket key (e.g., PROJ-123)"
+        assert response.text == "Please provide a Jira ticket key (e.g., PROJ-123)"
 
         # Verify User 1 still has their conversation
         user1_conv = repository.get_active("U11111111", "D11111111")
@@ -576,12 +577,12 @@ class TestDMHandlerFullFlow:
         )
 
         # Verify the response contains the comparison message
-        assert "*Ticket:* PROJ-123" in response
-        assert "*Existing Acceptance Criteria:*" in response
-        assert "\u2022 Existing AC 1" in response
-        assert "*Proposed New Acceptance Criteria:*" in response
-        assert "\u2022 New AC 1" in response
-        assert 'Reply with "approve"' in response
+        assert "*Ticket:* PROJ-123" in response.text
+        assert "*Existing Acceptance Criteria:*" in response.text
+        assert "\u2022 Existing AC 1" in response.text
+        assert "*Proposed New Acceptance Criteria:*" in response.text
+        assert "\u2022 New AC 1" in response.text
+        assert 'Reply with "approve"' in response.text
 
     @pytest.mark.asyncio
     async def test_full_flow_calls_regeneration_service(
@@ -629,7 +630,7 @@ class TestDMHandlerFullFlow:
             text="PROJ-123",
         )
 
-        assert response == "Processing PROJ-123..."
+        assert response.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_full_flow_with_no_existing_acs(
@@ -652,8 +653,8 @@ class TestDMHandlerFullFlow:
             text="NEW-123",
         )
 
-        assert "(No existing acceptance criteria)" in response
-        assert "\u2022 Brand new AC 1" in response
+        assert "(No existing acceptance criteria)" in response.text
+        assert "\u2022 Brand new AC 1" in response.text
 
 
 class TestDMHandlerIntermediateMessages:
@@ -840,7 +841,7 @@ class TestDMHandlerComparingStateApproval:
         )
 
         assert response is not None
-        assert "Done! ACs updated on PROJ-123" in response
+        assert "Done! ACs updated on PROJ-123" in response.text
 
     @pytest.mark.asyncio
     async def test_comparing_state_with_approve_intent_includes_jira_link(
@@ -870,7 +871,7 @@ class TestDMHandlerComparingStateApproval:
         )
 
         assert response is not None
-        assert "https://company.atlassian.net/browse/PROJ-456" in response
+        assert "https://company.atlassian.net/browse/PROJ-456" in response.text
 
     @pytest.mark.asyncio
     async def test_comparing_state_with_approve_intent_calls_approve_acs(
@@ -966,7 +967,7 @@ class TestDMHandlerComparingStateApproval:
         )
 
         # Should return the exact cancellation message per functional spec
-        assert response == "Cancelled. Original ACs remain unchanged."
+        assert response.text == "Cancelled. Original ACs remain unchanged."
         mock_regeneration_service.approve_acs.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1040,7 +1041,7 @@ class TestDMHandlerComparingStateApproval:
         )
 
         # Per functional spec: "Cancelled. Original ACs remain unchanged."
-        assert response == "Cancelled. Original ACs remain unchanged."
+        assert response.text == "Cancelled. Original ACs remain unchanged."
 
     @pytest.mark.asyncio
     async def test_comparing_state_with_modify_intent_triggers_regeneration(
@@ -1092,7 +1093,7 @@ class TestDMHandlerComparingStateApproval:
 
         # MODIFY triggers regeneration and returns new comparison
         assert response is not None
-        assert "*Ticket:* PROJ-123" in response
+        assert "*Ticket:* PROJ-123" in response.text
         mock_regeneration_service.approve_acs.assert_not_called()
         mock_regeneration_service.regenerate_with_feedback.assert_called_once()
 
@@ -1160,7 +1161,7 @@ class TestDMHandlerComparingStateApproval:
         )
 
         # Verify exact URL format
-        assert "https://company.atlassian.net/browse/TEST-42" in response
+        assert "https://company.atlassian.net/browse/TEST-42" in response.text
 
 
 class TestDMHandlerModifyIntent:
@@ -1294,11 +1295,11 @@ class TestDMHandlerModifyIntent:
 
         # Verify response is a formatted comparison message with new ACs
         assert response is not None
-        assert "*Ticket:* PROJ-123" in response
-        assert "*Proposed New Acceptance Criteria:*" in response
-        assert "New AC with error handling" in response
-        assert "Another new AC" in response
-        assert 'Reply with "approve"' in response
+        assert "*Ticket:* PROJ-123" in response.text
+        assert "*Proposed New Acceptance Criteria:*" in response.text
+        assert "New AC with error handling" in response.text
+        assert "Another new AC" in response.text
+        assert 'Reply with "approve"' in response.text
 
     @pytest.mark.asyncio
     async def test_modify_intent_passes_modification_request_to_service(
@@ -1553,7 +1554,7 @@ class TestDMHandlerErrorHandling:
             text="PROJ-123",
         )
 
-        assert response == (
+        assert response.text == (
             "I couldn't find ticket PROJ-123 in Jira. "
             "Please check the ticket key and try again."
         )
@@ -1575,7 +1576,7 @@ class TestDMHandlerErrorHandling:
             text="PROJ-456",
         )
 
-        assert response == (
+        assert response.text == (
             "Ticket PROJ-456 doesn't have a description. "
             "Please add a description in Jira and try again."
         )
@@ -1597,7 +1598,7 @@ class TestDMHandlerErrorHandling:
             text="PROJ-789",
         )
 
-        assert response == (
+        assert response.text == (
             "I'm having trouble connecting to Jira right now. "
             "Please try again in a few minutes."
         )
@@ -1619,7 +1620,7 @@ class TestDMHandlerErrorHandling:
             text="PROJ-999",
         )
 
-        assert response == (
+        assert response.text == (
             "I don't have access to ticket PROJ-999. "
             "Please check that the ticket exists and that the bot "
             "has the necessary permissions."
@@ -1813,7 +1814,7 @@ class TestDMHandlerEventDeduplication:
             text="PROJ-123",
             event_ts="1234567890.123456",
         )
-        assert response1 == "Processing PROJ-123..."
+        assert response1.text == "Processing PROJ-123..."
 
         # Second call with same ts+channel should be skipped (duplicate)
         response2 = await dm_handler.handle_message(
@@ -1833,7 +1834,7 @@ class TestDMHandlerEventDeduplication:
             text="PROJ-111",
             event_ts="1234567890.000001",
         )
-        assert response1 == "Processing PROJ-111..."
+        assert response1.text == "Processing PROJ-111..."
 
         response2 = await dm_handler.handle_message(
             user_id="U12345678",
@@ -1841,7 +1842,7 @@ class TestDMHandlerEventDeduplication:
             text="PROJ-222",
             event_ts="1234567890.000002",
         )
-        assert response2 == "Processing PROJ-222..."
+        assert response2.text == "Processing PROJ-222..."
 
     @pytest.mark.asyncio
     async def test_same_ts_different_channel_both_processed(self, dm_handler):
@@ -1852,7 +1853,7 @@ class TestDMHandlerEventDeduplication:
             text="PROJ-111",
             event_ts="1234567890.123456",
         )
-        assert response1 == "Processing PROJ-111..."
+        assert response1.text == "Processing PROJ-111..."
 
         response2 = await dm_handler.handle_message(
             user_id="U12345678",
@@ -1860,7 +1861,7 @@ class TestDMHandlerEventDeduplication:
             text="PROJ-222",
             event_ts="1234567890.123456",
         )
-        assert response2 == "Processing PROJ-222..."
+        assert response2.text == "Processing PROJ-222..."
 
     @pytest.mark.asyncio
     async def test_expired_cache_entry_allows_reprocessing(self, dm_handler):
@@ -1875,7 +1876,7 @@ class TestDMHandlerEventDeduplication:
             text="PROJ-123",
             event_ts="1234567890.123456",
         )
-        assert response1 == "Processing PROJ-123..."
+        assert response1.text == "Processing PROJ-123..."
 
         # Simulate time passing beyond the TTL by manipulating the cache entry
         # We patch time.monotonic to return a value far in the future
@@ -1890,7 +1891,7 @@ class TestDMHandlerEventDeduplication:
                 text="PROJ-123",
                 event_ts="1234567890.123456",
             )
-            assert response2 == "Processing PROJ-123..."
+            assert response2.text == "Processing PROJ-123..."
 
     @pytest.mark.asyncio
     async def test_no_event_ts_skips_deduplication(self, dm_handler):
@@ -1901,14 +1902,14 @@ class TestDMHandlerEventDeduplication:
             channel_id="D87654321",
             text="PROJ-123",
         )
-        assert response1 == "Processing PROJ-123..."
+        assert response1.text == "Processing PROJ-123..."
 
         response2 = await dm_handler.handle_message(
             user_id="U12345678",
             channel_id="D87654321",
             text="PROJ-456",
         )
-        assert response2 == "Processing PROJ-456..."
+        assert response2.text == "Processing PROJ-456..."
 
     @pytest.mark.asyncio
     async def test_duplicate_event_does_not_create_conversation(
@@ -2027,11 +2028,11 @@ class TestDMHandlerUnsupportedIssueType:
         )
 
         assert response is not None
-        assert "IGAL-123" in response
-        assert "unsupported issue type" in response
-        assert "Bug" in response
-        assert "Story" in response
-        assert "Task" in response
+        assert "IGAL-123" in response.text
+        assert "unsupported issue type" in response.text
+        assert "Bug" in response.text
+        assert "Story" in response.text
+        assert "Task" in response.text
 
     @pytest.mark.asyncio
     async def test_unsupported_issue_type_sets_conversation_to_error(
@@ -2113,8 +2114,8 @@ class TestDMHandlerStaleConversation:
 
         # Should get a helpful response, not None
         assert response is not None
-        assert "previous request got stuck" in response
-        assert "PROJ-123" in response  # contains the prompt format
+        assert "previous request got stuck" in response.text
+        assert "PROJ-123" in response.text  # contains the prompt format
 
     @pytest.mark.asyncio
     async def test_stale_generating_acs_conversation_gets_reset(
@@ -2137,7 +2138,7 @@ class TestDMHandlerStaleConversation:
         )
 
         assert response is not None
-        assert "previous request got stuck" in response
+        assert "previous request got stuck" in response.text
 
     @pytest.mark.asyncio
     async def test_stale_writing_to_jira_conversation_gets_reset(
@@ -2160,7 +2161,7 @@ class TestDMHandlerStaleConversation:
         )
 
         assert response is not None
-        assert "previous request got stuck" in response
+        assert "previous request got stuck" in response.text
 
     @pytest.mark.asyncio
     async def test_stale_conversation_is_marked_as_error(
@@ -2209,7 +2210,7 @@ class TestDMHandlerStaleConversation:
             channel_id="D87654321",
             text="hello",
         )
-        assert "previous request got stuck" in response1
+        assert "previous request got stuck" in response1.text
 
         # Second message: user can now submit a new ticket
         response2 = await dm_handler.handle_message(
@@ -2217,7 +2218,7 @@ class TestDMHandlerStaleConversation:
             channel_id="D87654321",
             text="PROJ-456",
         )
-        assert response2 == "Processing PROJ-456..."
+        assert response2.text == "Processing PROJ-456..."
 
     @pytest.mark.asyncio
     async def test_comparing_state_is_not_treated_as_stale(
@@ -2320,8 +2321,8 @@ class TestDMHandlerJiraUrlDoubleSlash:
 
         assert response is not None
         # The key assertion: no double slash before "browse"
-        assert "//browse" not in response
-        assert "https://provectus-dev.atlassian.net/browse/IGAL-1951" in response
+        assert "//browse" not in response.text
+        assert "https://provectus-dev.atlassian.net/browse/IGAL-1951" in response.text
 
     @pytest.mark.asyncio
     async def test_jira_url_correct_without_trailing_slash(
@@ -2363,7 +2364,7 @@ class TestDMHandlerJiraUrlDoubleSlash:
         )
 
         assert response is not None
-        assert "https://company.atlassian.net/browse/PROJ-100" in response
+        assert "https://company.atlassian.net/browse/PROJ-100" in response.text
 
     def test_build_jira_url_strips_trailing_slash(self, mock_slack_client, repository):
         """Test _build_jira_url directly strips trailing slash."""
