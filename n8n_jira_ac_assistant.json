@@ -43,8 +43,8 @@
       "parameters": {
         "method": "GET",
         "url": "={{ $json.jiraBaseUrl }}/rest/api/3/search/jql",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBasicAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -64,7 +64,7 @@
       "typeVersion": 4.2,
       "position": [440, 300],
       "credentials": {
-        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+        "jiraSoftwareCloudApi": { "id": "cred-jira-cloud", "name": "Jira SW Cloud account" }
       }
     },
     {
@@ -265,8 +265,8 @@
       "parameters": {
         "method": "GET",
         "url": "={{ $('Set Config').first().json.jiraBaseUrl }}/rest/api/3/issue/{{ $('Parse & Prepare ACs').first().json.ticketKey }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBasicAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -281,7 +281,7 @@
       "typeVersion": 4.2,
       "position": [3520, 300],
       "credentials": {
-        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+        "jiraSoftwareCloudApi": { "id": "cred-jira-cloud", "name": "Jira SW Cloud account" }
       }
     },
     {
@@ -298,8 +298,8 @@
       "parameters": {
         "method": "PUT",
         "url": "={{ $('Set Config').first().json.jiraBaseUrl }}/rest/api/3/issue/{{ $('Parse & Prepare ACs').first().json.ticketKey }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBasicAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ fields: { description: $json.updatedDescription } }) }}",
@@ -311,15 +311,15 @@
       "typeVersion": 4.2,
       "position": [3960, 300],
       "credentials": {
-        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+        "jiraSoftwareCloudApi": { "id": "cred-jira-cloud", "name": "Jira SW Cloud account" }
       }
     },
     {
       "parameters": {
         "method": "PUT",
         "url": "={{ $('Set Config').first().json.jiraBaseUrl }}/rest/api/3/issue/{{ $('Parse & Prepare ACs').first().json.ticketKey }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpBasicAuth",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraSoftwareCloudApi",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ update: { labels: [{ add: 'ac-generated' }] } }) }}",
@@ -331,7 +331,7 @@
       "typeVersion": 4.2,
       "position": [4180, 300],
       "credentials": {
-        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+        "jiraSoftwareCloudApi": { "id": "cred-jira-cloud", "name": "Jira SW Cloud account" }
       },
       "onError": "continueRegularOutput"
     },
@@ -445,7 +445,7 @@
     },
     {
       "parameters": {
-        "content": "## Setup Instructions\n\n**Credentials to configure:**\n1. **Jira Basic Auth** — HTTP Basic Auth with your Jira email and API token\n2. **Anthropic API Key** — HTTP Header Auth: name=`x-api-key`, value=your API key\n3. **Barley API Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <token>`\n4. **Slack Bot Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <xoxb-token>`\n\n**Config node:** Edit \"Set Config\" node to set your project key, Jira URL, and other settings.\n\n**Barley** is optional — if not configured, the flow continues with the original ticket description.\n\n**Slack escalation** is optional — if `escalationEmail` is empty, no Slack DM is sent for low-confidence ACs.",
+        "content": "## Setup Instructions\n\n**Credentials to configure:**\n1. **Jira SW Cloud** — Predefined Jira Software Cloud credential (supports SSO/OAuth)\n2. **Anthropic API Key** — HTTP Header Auth: name=`x-api-key`, value=your API key\n3. **Barley API Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <token>`\n4. **Slack Bot Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <xoxb-token>`\n\n**Config node:** Edit \"Set Config\" node to set your project key, Jira URL, and other settings.\n\n**Barley** is optional — if not configured, the flow continues with the original ticket description.\n\n**Slack escalation** is optional — if `escalationEmail` is empty, no Slack DM is sent for low-confidence ACs.",
         "height": 480,
         "width": 420,
         "color": 5
