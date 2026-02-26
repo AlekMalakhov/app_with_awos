@@ -424,6 +424,27 @@
     },
     {
       "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/assistant.threads.setTitle",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel_id: $json.channel, thread_ts: $json.ts, title: 'AC Review: ' + $('Parse & Prepare ACs').first().json.ticketKey }) }}",
+        "options": {}
+      },
+      "id": "slack-title-025",
+      "name": "Slack: Set Thread Title",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5280, 500],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-slack", "name": "Slack Bot Token" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
         "content": "## Setup Instructions\n\n**Credentials to configure:**\n1. **Jira Basic Auth** — HTTP Basic Auth with your Jira email and API token\n2. **Anthropic API Key** — HTTP Header Auth: name=`x-api-key`, value=your API key\n3. **Barley API Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <token>`\n4. **Slack Bot Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <xoxb-token>`\n\n**Config node:** Edit \"Set Config\" node to set your project key, Jira URL, and other settings.\n\n**Barley** is optional — if not configured, the flow continues with the original ticket description.\n\n**Slack escalation** is optional — if `escalationEmail` is empty, no Slack DM is sent for low-confidence ACs.",
         "height": 480,
         "width": 420,
@@ -545,6 +566,9 @@
       "main": [[{ "node": "Slack: Send Escalation", "type": "main", "index": 0 }]]
     },
     "Slack: Send Escalation": {
+      "main": [[{ "node": "Slack: Set Thread Title", "type": "main", "index": 0 }]]
+    },
+    "Slack: Set Thread Title": {
       "main": [[{ "node": "Loop Over Tickets", "type": "main", "index": 0 }]]
     }
   },
