@@ -1,0 +1,558 @@
+{
+  "name": "Jira AC Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 5 }]
+        }
+      },
+      "id": "trigger-001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            { "id": "c01", "name": "projectKey", "value": "PROJ", "type": "string" },
+            { "id": "c02", "name": "jiraBaseUrl", "value": "https://your-company.atlassian.net", "type": "string" },
+            { "id": "c03", "name": "issueTypes", "value": "Story,Task", "type": "string" },
+            { "id": "c04", "name": "lookbackDays", "value": "7", "type": "string" },
+            { "id": "c05", "name": "aiModel", "value": "claude-sonnet-4-20250514", "type": "string" },
+            { "id": "c06", "name": "aiMaxTokens", "value": "1024", "type": "string" },
+            { "id": "c07", "name": "confidenceThreshold", "value": "0.7", "type": "string" },
+            { "id": "c08", "name": "barleyApiUrl", "value": "", "type": "string" },
+            { "id": "c09", "name": "barleyProjectName", "value": "", "type": "string" },
+            { "id": "c10", "name": "escalationEmail", "value": "", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config-002",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.jiraBaseUrl }}/rest/api/3/search/jql",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "jql",
+              "value": "={{ 'project = ' + $json.projectKey + ' AND issuetype in (' + $json.issueTypes + ') AND (labels is EMPTY OR labels not in (\"ac-generated\", \"ac-generation-failed\", \"regenerating\")) AND created >= -' + $json.lookbackDays + 'd ORDER BY created ASC' }}"
+            },
+            { "name": "maxResults", "value": "50" },
+            { "name": "fields", "value": "summary,description,issuetype" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "jira-search-003",
+      "name": "Jira: Search Tickets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": {
+        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst issues = response.issues || [];\nif (issues.length === 0) {\n  return [];\n}\nreturn issues.map(issue => ({ json: issue }));"
+      },
+      "id": "extract-004",
+      "name": "Extract Issues",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": { "batchSize": 1, "options": {} },
+      "id": "loop-005",
+      "name": "Loop Over Tickets",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst fields = item.fields || {};\n\nfunction extractTextFromAdf(adf) {\n  if (!adf || typeof adf !== 'object') return '';\n  const texts = [];\n  function extract(node) {\n    if (typeof node === 'string') { texts.push(node); return; }\n    if (node && typeof node === 'object') {\n      if (node.text) texts.push(node.text);\n      if (Array.isArray(node.content)) node.content.forEach(extract);\n    }\n    if (Array.isArray(node)) node.forEach(extract);\n  }\n  extract(adf);\n  return texts.join(' ');\n}\n\nconst description = extractTextFromAdf(fields.description);\nconst summary = fields.summary || '';\nconst key = item.key || '';\nconst issueType = (fields.issuetype && fields.issuetype.name) ? fields.issuetype.name : '';\n\nlet shouldProcess = true;\nlet skipReason = '';\n\nif (!description || description.trim().length === 0) {\n  shouldProcess = false;\n  skipReason = 'Empty description';\n} else if (description.toLowerCase().includes('acceptance criteria')) {\n  shouldProcess = false;\n  skipReason = 'Already has acceptance criteria';\n}\n\nreturn [{\n  json: {\n    shouldProcess,\n    skipReason,\n    ticketKey: key,\n    summary,\n    description,\n    descriptionAdf: fields.description,\n    issueType\n  }\n}];"
+      },
+      "id": "validate-006",
+      "name": "Validate Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "if01",
+              "leftValue": "={{ $json.shouldProcess }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-process-007",
+      "name": "IF: Should Process",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1320, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $input.first().json;\nconst config = $('Set Config').first().json;\n\nconst systemPrompt = 'You are an expert at analyzing software development tickets and extracting their core subject matter.\\n\\nYour task is to read a Jira ticket\\'s summary and description, then extract the key topics, entities, domain concepts, and business terms.\\n\\nGUIDELINES:\\n- Identify the primary domain area (e.g., payments, authentication, reporting)\\n- Extract named entities such as systems, services, APIs, or integrations\\n- Capture business terms and domain-specific language\\n- Note any technical concepts, frameworks, or tools mentioned\\n- Return a consolidated natural-language summary that provides rich context about what this ticket is about — NOT a list of keywords\\n\\nUse the submit_extracted_topics tool to provide your response.';\n\nconst userMessage = 'TICKET SUMMARY: ' + ticket.summary + '\\n\\nTICKET DESCRIPTION:\\n' + ticket.description + '\\n\\nAnalyze this ticket and extract the key topics using the submit_extracted_topics tool.';\n\nconst requestBody = {\n  model: config.aiModel,\n  max_tokens: parseInt(config.aiMaxTokens) || 1024,\n  system: systemPrompt,\n  tools: [{\n    name: 'submit_extracted_topics',\n    description: 'Submit the extracted topics, entities, and domain concepts from a Jira ticket',\n    input_schema: {\n      type: 'object',\n      properties: {\n        topics: {\n          type: 'string',\n          description: 'A consolidated natural-language summary of the key topics, entities, domain concepts, and business terms found in the ticket.'\n        }\n      },\n      required: ['topics']\n    }\n  }],\n  tool_choice: { type: 'tool', name: 'submit_extracted_topics' },\n  messages: [{ role: 'user', content: userMessage }]\n};\n\nreturn [{ json: { requestBody } }];"
+      },
+      "id": "prep-topics-008",
+      "name": "Prepare Topics Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {}
+      },
+      "id": "anthropic-topics-009",
+      "name": "Anthropic: Extract Topics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-anthropic", "name": "Anthropic API Key" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $('Validate Ticket').first().json;\nconst config = $('Set Config').first().json;\nconst response = $input.first().json;\n\nlet topics = '';\ntry {\n  const content = response.content || [];\n  for (const block of content) {\n    if (block.type === 'tool_use' && block.name === 'submit_extracted_topics') {\n      topics = (block.input && block.input.topics) ? block.input.topics : '';\n    }\n  }\n} catch (e) {\n  topics = ticket.description;\n}\n\nconst projectCtx = config.barleyProjectName ? ('Project: ' + config.barleyProjectName + '\\n') : '';\nconst barleyPrompt = projectCtx + 'Feature: ' + ticket.summary + '\\nTopics: ' + topics + '\\n\\nProvide context for writing acceptance criteria. Respond in markdown with these sections:\\n## User Personas\\n## Relevant Workflows\\n## Acceptance Criteria Patterns\\n## Domain Context';\n\nconst barleyRequestBody = {\n  model: 'anth',\n  messages: [{ role: 'user', content: barleyPrompt }],\n  temperature: 0.3,\n  max_tokens: 1500\n};\n\nreturn [{ json: { topics, barleyRequestBody } }];"
+      },
+      "id": "parse-topics-010",
+      "name": "Parse Topics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Set Config').first().json.barleyApiUrl }}/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.barleyRequestBody) }}",
+        "options": {}
+      },
+      "id": "barley-011",
+      "name": "Barley: Get Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-barley", "name": "Barley API Token" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $('Validate Ticket').first().json;\nconst barleyResponse = $input.first().json;\n\nlet enrichedDescription = ticket.description;\n\ntry {\n  const choices = barleyResponse.choices || [];\n  if (choices.length > 0 && choices[0].message && choices[0].message.content) {\n    const barleyContext = choices[0].message.content;\n    enrichedDescription = ticket.description + '\\n\\nAdditional Context from Barley:\\n' + barleyContext;\n  }\n} catch (e) {\n  // Barley failed or not configured, continue with original description\n}\n\nreturn [{ json: { enrichedDescription } }];"
+      },
+      "id": "build-desc-012",
+      "name": "Build Enriched Description",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $('Validate Ticket').first().json;\nconst { enrichedDescription } = $input.first().json;\nconst config = $('Set Config').first().json;\n\nconst systemPrompt = 'You are an expert Product Owner writing acceptance criteria for software development tickets.\\n\\nYour task is to analyze Jira tickets and generate clear, testable acceptance criteria.\\n\\nGUIDELINES:\\n- Generate 3-7 acceptance criteria per ticket\\n- Use the format that best fits each criterion:\\n  - Given-When-Then for behavior-driven criteria\\n  - Simple checkbox statements for state/condition criteria\\n- Be SPECIFIC to THIS ticket - avoid generic criteria like \"Code is tested\" or \"Documentation is updated\"\\n- Each criterion should be independently verifiable\\n- If the description lacks sufficient detail to write meaningful ACs, set sufficient_information to false and explain why in skip_reason\\n\\nCONFIDENCE SCORING:\\nAfter generating acceptance criteria, assign a confidence_score between 0.0 and 1.0 using the following scale:\\n- 0.9-1.0: All requirements are clear and unambiguous, ACs are comprehensive\\n- 0.7-0.89: Most requirements are clear, minor gaps exist\\n- 0.5-0.69: Significant gaps in the description, several assumptions were made\\n- Below 0.5: Major information is missing, ACs are largely speculative\\n\\nWhen confidence is below 0.9, list the specific gaps or questions in confidence_gaps. Each entry should describe a concrete area where information was lacking (e.g., \"unclear user role\", \"missing error handling behavior\", \"no success/failure states defined\"). When confidence is 0.9 or above, confidence_gaps should be empty.\\n\\nUse the submit_acceptance_criteria tool to provide your response.';\n\nconst userMessage = 'TICKET SUMMARY: ' + ticket.summary + '\\n\\nTICKET DESCRIPTION:\\n' + (enrichedDescription || '(No description provided)') + '\\n\\nAnalyze this ticket and generate acceptance criteria using the submit_acceptance_criteria tool.';\n\nconst requestBody = {\n  model: config.aiModel,\n  max_tokens: parseInt(config.aiMaxTokens) || 1024,\n  system: systemPrompt,\n  tools: [{\n    name: 'submit_acceptance_criteria',\n    description: 'Submit the generated acceptance criteria for a Jira ticket',\n    input_schema: {\n      type: 'object',\n      properties: {\n        sufficient_information: {\n          type: 'boolean',\n          description: 'True if the ticket has enough information to generate meaningful acceptance criteria, False otherwise'\n        },\n        acceptance_criteria: {\n          type: 'array',\n          items: { type: 'string' },\n          description: 'List of 3-7 clear, testable acceptance criteria. Empty if insufficient information.'\n        },\n        skip_reason: {\n          type: 'string',\n          description: 'Brief explanation of why ACs cannot be generated (only when sufficient_information is false)'\n        },\n        confidence_score: {\n          type: 'number',\n          description: 'A value between 0.0 and 1.0 representing confidence in the completeness and accuracy of the generated acceptance criteria.'\n        },\n        confidence_gaps: {\n          type: 'array',\n          items: { type: 'string' },\n          description: 'Specific areas where the AI lacked information to produce fully confident acceptance criteria.'\n        }\n      },\n      required: ['sufficient_information', 'acceptance_criteria', 'confidence_score', 'confidence_gaps']\n    }\n  }],\n  tool_choice: { type: 'tool', name: 'submit_acceptance_criteria' },\n  messages: [{ role: 'user', content: userMessage }]\n};\n\nreturn [{ json: { requestBody } }];"
+      },
+      "id": "prep-ac-013",
+      "name": "Prepare AC Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {}
+      },
+      "id": "anthropic-acs-014",
+      "name": "Anthropic: Generate ACs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2860, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-anthropic", "name": "Anthropic API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Set Config').first().json;\nconst ticket = $('Validate Ticket').first().json;\nconst response = $input.first().json;\n\nlet acceptanceCriteria = [];\nlet confidenceScore = 0;\nlet confidenceGaps = [];\nlet sufficientInformation = false;\n\nconst content = response.content || [];\nfor (const block of content) {\n  if (block.type === 'tool_use' && block.name === 'submit_acceptance_criteria') {\n    sufficientInformation = block.input.sufficient_information || false;\n    acceptanceCriteria = block.input.acceptance_criteria || [];\n    confidenceScore = block.input.confidence_score || 0;\n    confidenceGaps = block.input.confidence_gaps || [];\n  }\n}\n\nconst validAcs = acceptanceCriteria.filter(function(ac) {\n  return typeof ac === 'string' && ac.trim().length > 0;\n});\nconst hasValidAcs = sufficientInformation && validAcs.length > 0;\n\nconst threshold = parseFloat(config.confidenceThreshold) || 0.7;\nconst isLowConfidence = confidenceScore < threshold;\nconst needsEscalation = isLowConfidence && config.escalationEmail && config.escalationEmail.length > 0 && hasValidAcs;\n\nlet finalAcs = validAcs.slice();\nif (isLowConfidence && hasValidAcs) {\n  const note = 'Note: Clarification has been requested from the Product Owner. Please review the following draft acceptance criteria.';\n  finalAcs = [note].concat(validAcs);\n}\n\nreturn [{ json: {\n  hasValidAcs: hasValidAcs,\n  acceptanceCriteria: finalAcs,\n  confidenceScore: confidenceScore,\n  confidenceGaps: confidenceGaps,\n  needsEscalation: needsEscalation,\n  ticketKey: ticket.ticketKey\n} }];"
+      },
+      "id": "parse-acs-015",
+      "name": "Parse & Prepare ACs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3080, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "if02",
+              "leftValue": "={{ $json.hasValidAcs }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-acs-016",
+      "name": "IF: Has Valid ACs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3300, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Set Config').first().json.jiraBaseUrl }}/rest/api/3/issue/{{ $('Parse & Prepare ACs').first().json.ticketKey }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "fields", "value": "description" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "jira-get-017",
+      "name": "Jira: Get Current Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3520, 300],
+      "credentials": {
+        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const acsData = $('Parse & Prepare ACs').first().json;\nconst ticketResponse = $input.first().json;\nconst currentDescAdf = ticketResponse.fields ? ticketResponse.fields.description : null;\n\nfunction generateLocalId() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n    var r = Math.random() * 16 | 0;\n    var v = c === 'x' ? r : (r & 0x3 | 0x8);\n    return v.toString(16);\n  });\n}\n\nconst now = new Date();\nconst months = ['January','February','March','April','May','June','July','August','September','October','November','December'];\nconst month = months[now.getUTCMonth()];\nconst day = now.getUTCDate();\nconst year = now.getUTCFullYear();\nconst hours = now.getUTCHours();\nconst minutes = now.getUTCMinutes().toString().padStart(2, '0');\nconst ampm = hours >= 12 ? 'PM' : 'AM';\nconst hour12 = hours % 12 || 12;\nconst timestamp = month + ' ' + day + ', ' + year + ' at ' + hour12 + ':' + minutes + ' ' + ampm + ' UTC';\n\nconst taskItems = acsData.acceptanceCriteria.map(function(ac) {\n  return {\n    type: 'taskItem',\n    attrs: { localId: generateLocalId(), state: 'TODO' },\n    content: [{ type: 'text', text: ac }]\n  };\n});\n\nconst newAcContent = [\n  {\n    type: 'heading',\n    attrs: { level: 2 },\n    content: [{ type: 'text', text: 'Acceptance Criteria' }]\n  },\n  {\n    type: 'taskList',\n    attrs: { localId: generateLocalId() },\n    content: taskItems\n  },\n  {\n    type: 'paragraph',\n    content: [{\n      type: 'text',\n      text: 'Generated by Jira AC Assistant (n8n) on ' + timestamp,\n      marks: [{ type: 'em' }]\n    }]\n  }\n];\n\nvar updatedDescription;\nif (currentDescAdf && currentDescAdf.type === 'doc') {\n  var existingContent = currentDescAdf.content || [];\n  updatedDescription = {\n    type: 'doc',\n    version: 1,\n    content: existingContent.concat(newAcContent)\n  };\n} else {\n  updatedDescription = {\n    type: 'doc',\n    version: 1,\n    content: newAcContent\n  };\n}\n\nreturn [{ json: { updatedDescription: updatedDescription } }];"
+      },
+      "id": "build-adf-018",
+      "name": "Build ADF Description",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3740, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Set Config').first().json.jiraBaseUrl }}/rest/api/3/issue/{{ $('Parse & Prepare ACs').first().json.ticketKey }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { description: $json.updatedDescription } }) }}",
+        "options": {}
+      },
+      "id": "jira-update-019",
+      "name": "Jira: Update Description",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3960, 300],
+      "credentials": {
+        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Set Config').first().json.jiraBaseUrl }}/rest/api/3/issue/{{ $('Parse & Prepare ACs').first().json.ticketKey }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ update: { labels: [{ add: 'ac-generated' }] } }) }}",
+        "options": {}
+      },
+      "id": "jira-label-020",
+      "name": "Jira: Add Label",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4180, 300],
+      "credentials": {
+        "httpBasicAuth": { "id": "cred-jira", "name": "Jira Basic Auth" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "id": "if03",
+              "leftValue": "={{ $('Parse & Prepare ACs').first().json.needsEscalation }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-escalate-021",
+      "name": "IF: Needs Escalation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [4400, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://slack.com/api/users.lookupByEmail",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "email", "value": "={{ $('Set Config').first().json.escalationEmail }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "slack-lookup-022",
+      "name": "Slack: Lookup User",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4620, 500],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-slack", "name": "Slack Bot Token" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/conversations.open",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ users: $json.user ? $json.user.id : '' }) }}",
+        "options": {}
+      },
+      "id": "slack-open-023",
+      "name": "Slack: Open DM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4840, 500],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-slack", "name": "Slack Bot Token" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (function() { var acsData = $('Parse & Prepare ACs').first().json; var config = $('Set Config').first().json; var ticket = $('Validate Ticket').first().json; var channelId = ($json.channel && $json.channel.id) ? $json.channel.id : ''; var ticketUrl = config.jiraBaseUrl + '/browse/' + acsData.ticketKey; var gapsText = (acsData.confidenceGaps || []).map(function(g){ return '\\u2022 ' + g; }).join('\\n'); var blocks = [ { type: 'header', text: { type: 'plain_text', text: acsData.ticketKey + ': ' + ticket.summary } }, { type: 'section', text: { type: 'mrkdwn', text: '<' + ticketUrl + '|View in Jira>' } }, { type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: 'Hi! I\\'ve generated some draft acceptance criteria for this ticket, but I have a few questions before they\\'re finalized:' } }, { type: 'section', text: { type: 'mrkdwn', text: gapsText } }, { type: 'context', elements: [{ type: 'mrkdwn', text: 'These draft ACs have been added to the ticket for reference.' }] } ]; return JSON.stringify({ channel: channelId, text: 'Clarification needed for ' + acsData.ticketKey + ': ' + ticket.summary, blocks: blocks }); })() }}",
+        "options": {}
+      },
+      "id": "slack-send-024",
+      "name": "Slack: Send Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5060, 500],
+      "credentials": {
+        "httpHeaderAuth": { "id": "cred-slack", "name": "Slack Bot Token" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## Setup Instructions\n\n**Credentials to configure:**\n1. **Jira Basic Auth** — HTTP Basic Auth with your Jira email and API token\n2. **Anthropic API Key** — HTTP Header Auth: name=`x-api-key`, value=your API key\n3. **Barley API Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <token>`\n4. **Slack Bot Token** (optional) — HTTP Header Auth: name=`Authorization`, value=`Bearer <xoxb-token>`\n\n**Config node:** Edit \"Set Config\" node to set your project key, Jira URL, and other settings.\n\n**Barley** is optional — if not configured, the flow continues with the original ticket description.\n\n**Slack escalation** is optional — if `escalationEmail` is empty, no Slack DM is sent for low-confidence ACs.",
+        "height": 480,
+        "width": 420,
+        "color": 5
+      },
+      "id": "note-setup",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-20, -240]
+    },
+    {
+      "parameters": {
+        "content": "## Barley Enrichment (Optional)\n\nExtracts topics from the ticket via Claude, then queries Barley for project context (user personas, workflows, AC patterns, domain context).\n\nIf Barley is not configured or fails, the flow gracefully continues with the original ticket description.",
+        "height": 200,
+        "width": 660,
+        "color": 4
+      },
+      "id": "note-barley",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1520, 80]
+    },
+    {
+      "parameters": {
+        "content": "## Slack Escalation (Optional)\n\nWhen confidence score < threshold, sends a DM to the configured stakeholder with confidence gaps.\n\nRequires `escalationEmail` in config and Slack Bot Token credential.",
+        "height": 200,
+        "width": 500,
+        "color": 3
+      },
+      "id": "note-slack",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [4600, 280]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "Set Config", "type": "main", "index": 0 }]]
+    },
+    "Set Config": {
+      "main": [[{ "node": "Jira: Search Tickets", "type": "main", "index": 0 }]]
+    },
+    "Jira: Search Tickets": {
+      "main": [[{ "node": "Extract Issues", "type": "main", "index": 0 }]]
+    },
+    "Extract Issues": {
+      "main": [[{ "node": "Loop Over Tickets", "type": "main", "index": 0 }]]
+    },
+    "Loop Over Tickets": {
+      "main": [
+        [{ "node": "Validate Ticket", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Validate Ticket": {
+      "main": [[{ "node": "IF: Should Process", "type": "main", "index": 0 }]]
+    },
+    "IF: Should Process": {
+      "main": [
+        [{ "node": "Prepare Topics Request", "type": "main", "index": 0 }],
+        [{ "node": "Loop Over Tickets", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Topics Request": {
+      "main": [[{ "node": "Anthropic: Extract Topics", "type": "main", "index": 0 }]]
+    },
+    "Anthropic: Extract Topics": {
+      "main": [[{ "node": "Parse Topics", "type": "main", "index": 0 }]]
+    },
+    "Parse Topics": {
+      "main": [[{ "node": "Barley: Get Context", "type": "main", "index": 0 }]]
+    },
+    "Barley: Get Context": {
+      "main": [[{ "node": "Build Enriched Description", "type": "main", "index": 0 }]]
+    },
+    "Build Enriched Description": {
+      "main": [[{ "node": "Prepare AC Request", "type": "main", "index": 0 }]]
+    },
+    "Prepare AC Request": {
+      "main": [[{ "node": "Anthropic: Generate ACs", "type": "main", "index": 0 }]]
+    },
+    "Anthropic: Generate ACs": {
+      "main": [[{ "node": "Parse & Prepare ACs", "type": "main", "index": 0 }]]
+    },
+    "Parse & Prepare ACs": {
+      "main": [[{ "node": "IF: Has Valid ACs", "type": "main", "index": 0 }]]
+    },
+    "IF: Has Valid ACs": {
+      "main": [
+        [{ "node": "Jira: Get Current Ticket", "type": "main", "index": 0 }],
+        [{ "node": "Loop Over Tickets", "type": "main", "index": 0 }]
+      ]
+    },
+    "Jira: Get Current Ticket": {
+      "main": [[{ "node": "Build ADF Description", "type": "main", "index": 0 }]]
+    },
+    "Build ADF Description": {
+      "main": [[{ "node": "Jira: Update Description", "type": "main", "index": 0 }]]
+    },
+    "Jira: Update Description": {
+      "main": [[{ "node": "Jira: Add Label", "type": "main", "index": 0 }]]
+    },
+    "Jira: Add Label": {
+      "main": [[{ "node": "IF: Needs Escalation", "type": "main", "index": 0 }]]
+    },
+    "IF: Needs Escalation": {
+      "main": [
+        [{ "node": "Slack: Lookup User", "type": "main", "index": 0 }],
+        [{ "node": "Loop Over Tickets", "type": "main", "index": 0 }]
+      ]
+    },
+    "Slack: Lookup User": {
+      "main": [[{ "node": "Slack: Open DM", "type": "main", "index": 0 }]]
+    },
+    "Slack: Open DM": {
+      "main": [[{ "node": "Slack: Send Escalation", "type": "main", "index": 0 }]]
+    },
+    "Slack: Send Escalation": {
+      "main": [[{ "node": "Loop Over Tickets", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1
+}

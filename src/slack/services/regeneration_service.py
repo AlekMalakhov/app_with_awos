@@ -123,8 +123,33 @@ class ACRegenerationService:
             if on_progress is not None:
                 await on_progress("Generating new acceptance criteria...")
 
-            # Enrich description with Barley project context (if available)
+            # Enrich description with parent hierarchy context
             enriched_description = ticket.description
+            if ticket.parent_key:
+                try:
+                    from src.jira.models import format_parent_chain
+
+                    chain = await self._jira_client.get_parent_chain(
+                        ticket.parent_key,
+                    )
+                    if chain:
+                        enriched_description += (
+                            "\n\n" + format_parent_chain(chain)
+                        )
+                        keys = [p.key for p in chain]
+                        logger.info(
+                            "Parent context applied for %s: %s",
+                            ticket_key,
+                            " -> ".join(keys),
+                        )
+                except Exception:
+                    logger.exception(
+                        "Parent context fetch failed for %s, "
+                        "proceeding without",
+                        ticket_key,
+                    )
+
+            # Enrich description with Barley project context (if available)
             if self._enrichment_service is not None:
                 try:
                     enrichment_result = await self._enrichment_service.enrich(
@@ -317,6 +342,24 @@ class ACRegenerationService:
         # Fetch the ticket again to get the original summary and description
         ticket = await self._jira_client.get_ticket(conversation.jira_ticket_key)
 
+        # Fetch parent hierarchy context
+        parent_section = ""
+        if ticket.parent_key:
+            try:
+                from src.jira.models import format_parent_chain
+
+                chain = await self._jira_client.get_parent_chain(
+                    ticket.parent_key,
+                )
+                if chain:
+                    parent_section = "\n" + format_parent_chain(chain) + "\n"
+            except Exception:
+                logger.exception(
+                    "Parent context fetch failed for %s, "
+                    "proceeding without",
+                    conversation.jira_ticket_key,
+                )
+
         # Format previously proposed ACs as bullet list
         previous_acs_list = conversation.proposed_acs or []
         previous_acs_formatted = "\n".join(f"- {ac}" for ac in previous_acs_list)
@@ -329,7 +372,7 @@ class ACRegenerationService:
 
 Description:
 {ticket.description or "(No description provided)"}
-
+{parent_section}
 Previously proposed acceptance criteria:
 {previous_acs_section}
 

@@ -10,6 +10,6 @@ class DatabaseSettings(BaseSettings):
         DATABASE_PATH: Path to SQLite database file (default: data/conversations.db)
     """
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", extra="ignore")
 
     database_path: str = "data/conversations.db"

@@ -21,7 +21,7 @@ from src.jira.exceptions import (
     JiraIssueTypeNotSupportedError,
     JiraTicketNotFoundError,
 )
-from src.jira.models import TicketData
+from src.jira.models import ParentContext, TicketData, format_parent_chain
 
 __all__ = [
     "JiraClient",
@@ -32,7 +32,9 @@ __all__ = [
     "JiraTicketNotFoundError",
     "JiraIssueTypeNotSupportedError",
     "EmptyDescriptionError",
+    "ParentContext",
     "TicketData",
+    "format_parent_chain",
     "validate_acs",
     "format_acs_to_adf",
     "append_acs_to_description",

@@ -13,7 +13,7 @@ class AISettings(BaseSettings):
         AI_TEMPERATURE: Temperature for AI response (default: 0.3)
     """
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", env_file=".env", extra="ignore")
 
     anthropic_api_key: str = ""  # Empty string = AI disabled
     ai_model: str = "claude-sonnet-4-20250514"

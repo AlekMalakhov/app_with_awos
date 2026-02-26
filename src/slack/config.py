@@ -16,7 +16,7 @@ class SlackSettings(BaseSettings):
         SLACK_CONFIDENCE_THRESHOLD: ACs below this confidence score trigger escalation (default: 0.7)
     """
 
-    model_config = SettingsConfigDict(env_prefix="SLACK_")
+    model_config = SettingsConfigDict(env_prefix="SLACK_", env_file=".env", extra="ignore")
 
     bot_token: str
     app_token: str

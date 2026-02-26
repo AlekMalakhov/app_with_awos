@@ -19,13 +19,16 @@ class JiraSettings(BaseSettings):
         JIRA_POLLING_MAX_FAILURES: Failures before adding ac-generation-failed label (default: 3)
     """
 
-    model_config = SettingsConfigDict(env_prefix="JIRA_")
+    model_config = SettingsConfigDict(env_prefix="JIRA_", env_file=".env", extra="ignore")
 
     base_url: str
     user_email: str
     api_token: str
     issue_types: str = "Story,Task"
     max_retries: int = 3
+
+    # Epic context
+    epic_link_field: str = "parent"
 
     # Polling configuration
     project_key: str = ""

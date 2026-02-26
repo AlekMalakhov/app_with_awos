@@ -13,7 +13,7 @@ class BarleySettings(BaseSettings):
         BARLEY_TIMEOUT: Request timeout in seconds (default: 30)
     """
 
-    model_config = SettingsConfigDict(env_prefix="BARLEY_")
+    model_config = SettingsConfigDict(env_prefix="BARLEY_", env_file=".env", extra="ignore")
 
     enabled: bool = False
     api_url: str

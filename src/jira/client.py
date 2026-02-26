@@ -19,7 +19,7 @@ from src.jira.exceptions import (
     JiraIssueTypeNotSupportedError,
     JiraTicketNotFoundError,
 )
-from src.jira.models import TicketData
+from src.jira.models import ParentContext, TicketData
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +192,124 @@ class JiraClient:
         extract_text(adf)
         return " ".join(texts)
 
+    def _extract_parent_key(self, fields: dict) -> str | None:
+        """Extract the parent issue key from response fields.
+
+        Checks the ``parent`` field first (next-gen projects and
+        subtasks in classic projects), then falls back to the
+        configurable epic link custom field (classic projects).
+
+        Args:
+            fields: The ``fields`` dict from the Jira API response.
+
+        Returns:
+            The parent issue key, or None if no parent is linked.
+        """
+        parent = fields.get("parent")
+        if parent and isinstance(parent, dict):
+            parent_key = parent.get("key")
+            if parent_key:
+                return parent_key
+
+        epic_field = self._settings.epic_link_field
+        if epic_field and epic_field != "parent":
+            value = fields.get(epic_field)
+            if value and isinstance(value, str):
+                return value
+
+        return None
+
+    def _parent_fields(self) -> str:
+        """Build the ``fields`` query param for parent chain fetches."""
+        base = "summary,description,issuetype,parent"
+        epic_field = self._settings.epic_link_field
+        if epic_field and epic_field != "parent":
+            base += f",{epic_field}"
+        return base
+
+    async def get_parent_chain(
+        self,
+        parent_key: str,
+        max_depth: int = 3,
+    ) -> list[ParentContext]:
+        """Walk the issue hierarchy upward and collect context.
+
+        Starting from *parent_key*, fetches each parent's summary,
+        description, and issue type, then follows *its* parent link.
+        Stops when there is no further parent or *max_depth* is
+        reached.
+
+        This is a best-effort operation — it never raises.  If any
+        single fetch fails the chain is returned as-is (possibly
+        partially populated).
+
+        Args:
+            parent_key: The Jira key of the first parent to fetch.
+            max_depth: Maximum number of levels to walk (default 3).
+
+        Returns:
+            Ordered list of ``ParentContext`` objects from nearest
+            parent to most distant ancestor.
+        """
+        chain: list[ParentContext] = []
+        current_key: str | None = parent_key
+        fields_param = self._parent_fields()
+
+        for _ in range(max_depth):
+            if not current_key:
+                break
+            try:
+                response = await self._client.get(
+                    f"/rest/api/3/issue/{current_key}",
+                    params={"fields": fields_param},
+                )
+                if response.status_code != 200:
+                    logger.warning(
+                        "Failed to fetch parent %s: HTTP %d",
+                        current_key,
+                        response.status_code,
+                    )
+                    break
+
+                data = response.json()
+                fields = data.get("fields", {})
+                summary = fields.get("summary", "")
+                desc_adf = fields.get("description")
+                description = self._extract_text_from_adf(desc_adf)
+                issuetype = fields.get("issuetype", {})
+                issue_type = (
+                    issuetype.get("name", "")
+                    if issuetype
+                    else ""
+                )
+
+                chain.append(
+                    ParentContext(
+                        key=current_key,
+                        summary=summary,
+                        description=description,
+                        issue_type=issue_type,
+                    )
+                )
+                logger.info(
+                    "Fetched parent context: %s (%s)",
+                    current_key,
+                    issue_type,
+                )
+
+                # Walk up to the next parent
+                current_key = self._extract_parent_key(fields)
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch parent %s: %s",
+                    current_key,
+                    e,
+                )
+                break
+
+        return chain
+
     async def get_ticket(self, issue_key: str) -> TicketData:
         """Retrieve ticket data from Jira by issue key.
 
@@ -219,7 +337,7 @@ class JiraClient:
         async def _get_ticket_with_retry() -> dict:
             response = await self._client.get(
                 f"/rest/api/3/issue/{issue_key}",
-                params={"fields": "summary,description,issuetype"},
+                params={"fields": "summary,description,issuetype,parent"},
             )
 
             if response.status_code == 200:
@@ -276,6 +394,7 @@ class JiraClient:
         description = self._extract_text_from_adf(description_adf)
         issuetype = fields.get("issuetype", {})
         issue_type = issuetype.get("name", "") if issuetype else ""
+        parent_key = self._extract_parent_key(fields)
 
         # Validate issue type
         if issue_type not in self._settings.issue_types_list:
@@ -290,6 +409,7 @@ class JiraClient:
             description=description,
             description_adf=description_adf,
             issue_type=issue_type,
+            parent_key=parent_key,
         )
 
     async def search_tickets(self, jql: str, max_results: int = 50) -> list[TicketData]:
@@ -321,7 +441,7 @@ class JiraClient:
                 params={
                     "jql": jql,
                     "maxResults": max_results,
-                    "fields": "summary,description,issuetype",
+                    "fields": "summary,description,issuetype,parent",
                 },
             )
 
@@ -380,6 +500,7 @@ class JiraClient:
             description = self._extract_text_from_adf(description_adf)
             issuetype = fields.get("issuetype", {})
             issue_type = issuetype.get("name", "") if issuetype else ""
+            parent_key = self._extract_parent_key(fields)
 
             tickets.append(
                 TicketData(
@@ -388,6 +509,7 @@ class JiraClient:
                     description=description,
                     description_adf=description_adf,
                     issue_type=issue_type,
+                    parent_key=parent_key,
                 )
             )
 

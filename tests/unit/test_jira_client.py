@@ -355,7 +355,7 @@ class TestJiraClientGetTicket:
     ):
         """Test that get_ticket returns TicketData with correct fields on success."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123?fields=summary,description,issuetype",
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-123?fields=summary,description,issuetype,parent",
             method="GET",
             status_code=200,
             json={
@@ -396,7 +396,7 @@ class TestJiraClientGetTicket:
     ):
         """Test that get_ticket raises JiraTicketNotFoundError on 404."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/issue/PROJ-999?fields=summary,description,issuetype",
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-999?fields=summary,description,issuetype,parent",
             method="GET",
             status_code=404,
             json={"errorMessages": ["Issue does not exist"]},
@@ -417,7 +417,7 @@ class TestJiraClientGetTicket:
     ):
         """Test that get_ticket returns empty string for null description."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/issue/PROJ-456?fields=summary,description,issuetype",
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-456?fields=summary,description,issuetype,parent",
             method="GET",
             status_code=200,
             json={
@@ -447,7 +447,7 @@ class TestJiraClientGetTicket:
     ):
         """Test that get_ticket raises JiraIssueTypeNotSupportedError for unsupported type."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/issue/PROJ-789?fields=summary,description,issuetype",
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-789?fields=summary,description,issuetype,parent",
             method="GET",
             status_code=200,
             json={
@@ -475,7 +475,7 @@ class TestJiraClientGetTicket:
     ):
         """Test that get_ticket succeeds for issue type 'Task' (in configured list)."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/issue/PROJ-101?fields=summary,description,issuetype",
+            url="https://test.atlassian.net/rest/api/3/issue/PROJ-101?fields=summary,description,issuetype,parent",
             method="GET",
             status_code=200,
             json={
@@ -520,7 +520,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets returns list of TicketData when API returns issues."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype%2Cparent",
             method="GET",
             status_code=200,
             json={
@@ -583,7 +583,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets returns empty list when API returns no issues."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+NONEXISTENT&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+NONEXISTENT&maxResults=50&fields=summary%2Cdescription%2Cissuetype%2Cparent",
             method="GET",
             status_code=200,
             json={
@@ -617,14 +617,14 @@ class TestJiraClientSearchTickets:
         """
         # First response: 500 Server Error
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype%2Cparent",
             method="GET",
             status_code=500,
             json={"message": "Internal Server Error"},
         )
         # Second response: 200 Success
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype%2Cparent",
             method="GET",
             status_code=200,
             json={
@@ -665,7 +665,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets raises JiraAuthenticationError on HTTP 401."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype%2Cparent",
             method="GET",
             status_code=401,
             json={"message": "Unauthorized"},
@@ -687,7 +687,7 @@ class TestJiraClientSearchTickets:
     ):
         """Test that search_tickets raises JiraAuthenticationError on HTTP 403."""
         httpx_mock.add_response(
-            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype",
+            url="https://test.atlassian.net/rest/api/3/search/jql?jql=project+%3D+PROJ&maxResults=50&fields=summary%2Cdescription%2Cissuetype%2Cparent",
             method="GET",
             status_code=403,
             json={"message": "Forbidden"},

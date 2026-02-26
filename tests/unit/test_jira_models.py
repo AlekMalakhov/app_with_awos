@@ -208,7 +208,7 @@ class TestTicketDataSerialization:
 
         result = ticket.model_dump()
 
-        expected_keys = {"key", "summary", "description", "description_adf", "issue_type"}
+        expected_keys = {"key", "summary", "description", "description_adf", "issue_type", "parent_key"}
         assert set(result.keys()) == expected_keys
 
 

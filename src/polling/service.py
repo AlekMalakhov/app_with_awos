@@ -215,8 +215,33 @@ class PollingService:
             logger.info("Skipping %s: already has acceptance criteria", ticket.key)
             return False
 
-        # Enrich description with Barley project context (if available)
+        # Enrich description with parent hierarchy context
         enriched_description = ticket.description
+        if ticket.parent_key:
+            try:
+                from src.jira.models import format_parent_chain
+
+                chain = await self._client.get_parent_chain(
+                    ticket.parent_key,
+                )
+                if chain:
+                    enriched_description += (
+                        "\n\n" + format_parent_chain(chain)
+                    )
+                    keys = [p.key for p in chain]
+                    logger.info(
+                        "Parent context applied for %s: %s",
+                        ticket.key,
+                        " -> ".join(keys),
+                    )
+            except Exception:
+                logger.exception(
+                    "Parent context fetch failed for %s, "
+                    "proceeding without",
+                    ticket.key,
+                )
+
+        # Enrich description with Barley project context (if available)
         if self._enrichment_service is not None:
             try:
                 enrichment_result = await self._enrichment_service.enrich(
