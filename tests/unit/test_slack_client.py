@@ -617,10 +617,10 @@ class TestSlackClientSendBlocksMessage:
     """Test suite for SlackClient.send_blocks_message() method."""
 
     @pytest.mark.asyncio
-    async def test_successful_blocks_message_returns_true(
+    async def test_successful_blocks_message_returns_ts(
         self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
     ):
-        """Test that send_blocks_message returns True on success and sends correct payload."""
+        """Test that send_blocks_message returns ts on success and sends correct payload."""
         httpx_mock.add_response(
             url="https://slack.com/api/chat.postMessage",
             method="POST",
@@ -637,7 +637,7 @@ class TestSlackClientSendBlocksMessage:
             result = await client.send_blocks_message(
                 "D123", blocks, "Hello world"
             )
-            assert result is True
+            assert result == "123.456"
 
             requests = httpx_mock.get_requests()
             assert len(requests) == 1
@@ -652,10 +652,10 @@ class TestSlackClientSendBlocksMessage:
             await client.close()
 
     @pytest.mark.asyncio
-    async def test_api_error_returns_false(
+    async def test_api_error_returns_none(
         self, httpx_mock: HTTPXMock, slack_settings: SlackSettings
     ):
-        """Test that send_blocks_message returns False on API error."""
+        """Test that send_blocks_message returns None on API error."""
         httpx_mock.add_response(
             url="https://slack.com/api/chat.postMessage",
             method="POST",
@@ -672,6 +672,6 @@ class TestSlackClientSendBlocksMessage:
             result = await client.send_blocks_message(
                 "C0000000000", blocks, "Hello"
             )
-            assert result is False
+            assert result is None
         finally:
             await client.close()

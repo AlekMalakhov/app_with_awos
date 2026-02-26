@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from src.database.models import EscalationRecord
+from src.database.models import ConversationState, ConversationStatus, EscalationRecord
 from src.jira import JiraClient, JiraSettings, TicketData
 from src.jira.ac_formatter import append_acs_to_description, validate_acs
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from src.ai import ACGenerator
     from src.ai.models import ACGenerationResult
     from src.barley.service import BarleyEnrichmentService
-    from src.database.repository import EscalationRepository
+    from src.database.repository import ConversationRepository, EscalationRepository
     from src.slack.services.escalation_service import SlackEscalationService
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class PollingService:
         enrichment_service: BarleyEnrichmentService | None = None,
         escalation_service: SlackEscalationService | None = None,
         escalation_repository: EscalationRepository | None = None,
+        conversation_repository: ConversationRepository | None = None,
         confidence_threshold: float = 0.7,
     ) -> None:
         """Initialize the polling service.
@@ -51,6 +52,8 @@ class PollingService:
                 low-confidence ACs to a stakeholder via Slack DM.
             escalation_repository: Optional EscalationRepository for persisting
                 escalation records to the database.
+            conversation_repository: Optional ConversationRepository for creating
+                conversation state when escalation is sent (enables thread replies).
             confidence_threshold: Minimum confidence score (0.0-1.0) required to
                 write ACs directly. Below this threshold, escalation is triggered.
         """
@@ -60,6 +63,7 @@ class PollingService:
         self._enrichment_service = enrichment_service
         self._escalation_service = escalation_service
         self._escalation_repository = escalation_repository
+        self._conversation_repository = conversation_repository
         self._confidence_threshold = confidence_threshold
         self._failure_counts: dict[str, int] = {}  # In-memory failure tracking
         self._running = False
@@ -417,6 +421,31 @@ class PollingService:
                 error_message=escalation_result.error,
             )
             self._escalation_repository.create(record)
+
+        # Create conversation state so the user can reply in the thread
+        if (
+            escalation_result.sent
+            and escalation_result.slack_user_id
+            and escalation_result.channel_id
+            and escalation_result.message_ts
+            and self._conversation_repository
+        ):
+            conversation = ConversationState(
+                id=str(uuid.uuid4()),
+                slack_user_id=escalation_result.slack_user_id,
+                slack_channel_id=escalation_result.channel_id,
+                jira_ticket_key=ticket_key,
+                status=ConversationStatus.COMPARING,
+                proposed_acs=generated_acs,
+                slack_thread_ts=escalation_result.message_ts,
+            )
+            self._conversation_repository.create(conversation)
+            logger.info(
+                "Created conversation %s for escalation thread %s (ticket %s)",
+                conversation.id,
+                escalation_result.message_ts,
+                ticket_key,
+            )
 
         # Prepend note/warning to the ACs
         if escalation_result.sent:

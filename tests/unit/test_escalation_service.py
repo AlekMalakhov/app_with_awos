@@ -45,7 +45,8 @@ def mock_slack_client() -> MagicMock:
     mock = MagicMock()
     mock.lookup_user_by_email = AsyncMock(return_value="U12345")
     mock.open_conversation = AsyncMock(return_value="D67890")
-    mock.send_blocks_message = AsyncMock(return_value=True)
+    mock.send_blocks_message = AsyncMock(return_value="1234567890.123456")
+    mock.set_thread_title = AsyncMock(return_value=True)
     return mock
 
 
@@ -242,10 +243,10 @@ class TestSlackEscalationServiceDMSendFails:
         service: SlackEscalationService,
         mock_slack_client: MagicMock,
     ) -> None:
-        """Verify returns sent=False when send_blocks_message returns False."""
+        """Verify returns sent=False when send_blocks_message returns None."""
         mock_slack_client.lookup_user_by_email = AsyncMock(return_value="U12345")
         mock_slack_client.open_conversation = AsyncMock(return_value="D67890")
-        mock_slack_client.send_blocks_message = AsyncMock(return_value=False)
+        mock_slack_client.send_blocks_message = AsyncMock(return_value=None)
 
         result = await service.escalate(
             TICKET_KEY, TICKET_SUMMARY, TICKET_URL, CONFIDENCE_GAPS

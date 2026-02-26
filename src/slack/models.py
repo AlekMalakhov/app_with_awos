@@ -27,11 +27,15 @@ class EscalationResult(BaseModel):
     Attributes:
         sent: Whether the DM was successfully sent.
         slack_user_id: Resolved Slack user ID (if found).
+        message_ts: Timestamp of the sent message (thread root).
+        channel_id: DM channel ID where the message was sent.
         error: Error description if sending failed.
     """
 
     sent: bool
     slack_user_id: str | None = None
+    message_ts: str | None = None
+    channel_id: str | None = None
     error: str | None = None
 
 

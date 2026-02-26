@@ -171,11 +171,11 @@ class SlackClient:
 
     async def send_blocks_message(
         self, channel: str, blocks: list[dict], text: str
-    ) -> bool:
+    ) -> str | None:
         """Send a Block Kit message to a Slack channel or DM.
 
         Sends a rich message using Slack Block Kit layout blocks via
-        chat.postMessage. Does not raise exceptions; returns False on
+        chat.postMessage. Does not raise exceptions; returns None on
         any failure.
 
         Args:
@@ -184,7 +184,7 @@ class SlackClient:
             text: Fallback text shown in notifications and accessibility contexts.
 
         Returns:
-            True if the message was sent successfully, False otherwise.
+            The message timestamp (ts) if sent successfully, None otherwise.
         """
         try:
             response = await self._client.post(
@@ -194,12 +194,13 @@ class SlackClient:
             data = response.json()
 
             if data.get("ok"):
+                ts = data.get("ts")
                 logger.info(
                     "Successfully sent blocks message to channel %s (ts: %s)",
                     data.get("channel"),
-                    data.get("ts"),
+                    ts,
                 )
-                return True
+                return ts
 
             error_code = data.get("error", "unknown_error")
             logger.error(
@@ -207,12 +208,66 @@ class SlackClient:
                 channel,
                 error_code,
             )
-            return False
+            return None
 
         except Exception:
             logger.exception(
                 "Unexpected error sending blocks message to %s",
                 channel,
+            )
+            return None
+
+    async def set_thread_title(
+        self, channel_id: str, thread_ts: str, title: str
+    ) -> bool:
+        """Set a title on an assistant thread.
+
+        Calls assistant.threads.setTitle so that Slack registers the
+        bot-initiated message as a proper assistant thread, allowing
+        users to reply.
+
+        Args:
+            channel_id: The DM channel ID.
+            thread_ts: The timestamp of the root message (thread root).
+            title: The title to display in the assistant History tab.
+
+        Returns:
+            True if the title was set successfully, False otherwise.
+        """
+        try:
+            response = await self._client.post(
+                "/assistant.threads.setTitle",
+                json={
+                    "channel_id": channel_id,
+                    "thread_ts": thread_ts,
+                    "title": title,
+                },
+            )
+            data = response.json()
+
+            if data.get("ok"):
+                logger.info(
+                    "Set assistant thread title for %s/%s: %s",
+                    channel_id,
+                    thread_ts,
+                    title,
+                )
+                return True
+
+            error_code = data.get("error", "unknown_error")
+            logger.error(
+                "Failed to set thread title for %s/%s: %s",
+                channel_id,
+                thread_ts,
+                error_code,
+            )
+            return False
+
+        except Exception:
+            logger.exception(
+                "Unexpected error setting thread title for %s/%s",
+                channel_id,
+                thread_ts,
             )
             return False
 

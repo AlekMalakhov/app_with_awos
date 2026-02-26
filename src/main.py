@@ -173,6 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error("JIRA_PROJECT_KEY required when polling is enabled")
             sys.exit(1)
 
+        conversation_repository = ConversationRepository()
         polling_service = PollingService(
             jira_client,
             settings,
@@ -180,6 +181,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             enrichment_service,
             escalation_service=slack_escalation_service,
             escalation_repository=escalation_repository,
+            conversation_repository=conversation_repository,
             confidence_threshold=slack_settings.confidence_threshold
             if slack_settings
             else 0.7,

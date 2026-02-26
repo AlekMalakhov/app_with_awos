@@ -230,6 +230,7 @@ class SlackSocketModeService:
             channel_id = event.get("channel")
             text = event.get("text", "")
             event_ts = event.get("ts")
+            thread_ts = event.get("thread_ts")
             channel_type = event.get("channel_type")
 
             if not user_id or not channel_id:
@@ -254,8 +255,9 @@ class SlackSocketModeService:
                 is_assistant_thread,
             )
 
-            # Set status if in assistant thread and set_status is available
-            if set_status is not None:
+            # Set status if in assistant thread and this is NOT a thread reply
+            # (thread replies to escalations are quick approve/reject, no status needed)
+            if set_status is not None and not thread_ts:
                 try:
                     result = set_status("is thinking...")
                     if asyncio.iscoroutine(result):
@@ -265,7 +267,7 @@ class SlackSocketModeService:
 
             # Process the message using DMHandler
             response = await self._process_message(
-                user_id, channel_id, text, event_ts=event_ts
+                user_id, channel_id, text, event_ts=event_ts, thread_ts=thread_ts
             )
 
             if response:
@@ -274,12 +276,22 @@ class SlackSocketModeService:
                     say_kwargs["thread_ts"] = response.thread_ts
                 await say(**say_kwargs)
 
+            # Clear assistant status after processing thread replies
+            if set_status is not None and thread_ts:
+                try:
+                    result = set_status("")
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as e:
+                    logger.debug("Could not clear status: %s", e)
+
     async def _process_message(
         self,
         user_id: str,
         channel_id: str,
         text: str,
         event_ts: str | None = None,
+        thread_ts: str | None = None,
     ) -> DMResponse | None:
         """Process a DM message using the DMHandler.
 
@@ -291,6 +303,7 @@ class SlackSocketModeService:
             channel_id: The Slack channel/DM ID.
             text: The message text content.
             event_ts: Optional Slack event timestamp for deduplication.
+            thread_ts: Optional thread timestamp when the message is a thread reply.
 
         Returns:
             DMResponse with text and thread_ts, or None if no response needed.
@@ -340,7 +353,7 @@ class SlackSocketModeService:
             )
 
             return await handler.handle_message(
-                user_id, channel_id, text, event_ts=event_ts
+                user_id, channel_id, text, event_ts=event_ts, thread_ts=thread_ts
             )
 
         except Exception as e:

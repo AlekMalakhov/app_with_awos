@@ -111,27 +111,40 @@ class SlackEscalationService:
             )
 
             # Step 6: Send the message
-            success = await self._client.send_blocks_message(
+            message_ts = await self._client.send_blocks_message(
                 channel_id, blocks, fallback_text
             )
 
-            if success:
-                logger.info(
-                    "Escalation DM sent successfully to user %s for ticket %s",
+            if not message_ts:
+                logger.error(
+                    "Failed to send escalation DM to user %s for ticket %s",
                     slack_user_id,
                     ticket_key,
                 )
-                return EscalationResult(sent=True, slack_user_id=slack_user_id)
+                return EscalationResult(
+                    sent=False,
+                    slack_user_id=slack_user_id,
+                    channel_id=channel_id,
+                    error="Failed to send DM",
+                )
 
-            logger.error(
-                "Failed to send escalation DM to user %s for ticket %s",
+            # Step 7: Register as assistant thread so user can reply
+            await self._client.set_thread_title(
+                channel_id,
+                message_ts,
+                f"AC Review: {ticket_key}",
+            )
+
+            logger.info(
+                "Escalation DM sent successfully to user %s for ticket %s",
                 slack_user_id,
                 ticket_key,
             )
             return EscalationResult(
-                sent=False,
+                sent=True,
                 slack_user_id=slack_user_id,
-                error="Failed to send DM",
+                message_ts=message_ts,
+                channel_id=channel_id,
             )
 
         except Exception:

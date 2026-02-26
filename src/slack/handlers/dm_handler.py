@@ -166,6 +166,7 @@ class DMHandler:
         channel_id: str,
         text: str,
         event_ts: str | None = None,
+        thread_ts: str | None = None,
     ) -> DMResponse | None:
         """Process an incoming DM message and return response if needed.
 
@@ -173,6 +174,10 @@ class DMHandler:
         creates a new conversation with FETCHING_TICKET status. If no ticket key
         is found and there's no active conversation (or the active conversation
         is in AWAITING_TICKET state), returns a prompt message.
+
+        When thread_ts is provided (reply in a thread), the handler first tries
+        to find an existing conversation by thread timestamp (e.g., escalation
+        threads created by the polling service).
 
         When event_ts is provided, the handler will check for duplicate events
         using the ts+channel as a composite key. Events seen within the TTL
@@ -184,6 +189,7 @@ class DMHandler:
             channel_id: The Slack channel/DM ID where the message was received.
             text: The message text content.
             event_ts: Optional Slack event timestamp for deduplication.
+            thread_ts: Optional thread timestamp when the message is a reply.
 
         Returns:
             DMResponse with text and optional thread_ts, or None if no response
@@ -199,11 +205,31 @@ class DMHandler:
             return None
 
         logger.debug(
-            "Processing DM message: user=%s, channel=%s, text=%s",
+            "Processing DM message: user=%s, channel=%s, text=%s, thread_ts=%s",
             user_id,
             channel_id,
             text[:50] if text else None,
+            thread_ts,
         )
+
+        # If this is a thread reply, try to find the conversation by thread_ts
+        if thread_ts:
+            thread_conversation = self._repository.get_by_thread_ts(
+                channel_id, thread_ts
+            )
+            if thread_conversation:
+                if thread_conversation.status == ConversationStatus.COMPARING:
+                    return await self._handle_comparing_response(
+                        thread_conversation, text
+                    )
+                # Conversation exists but is in a terminal/non-comparing state
+                # (e.g., already COMPLETED) — don't fall through to default logic
+                logger.debug(
+                    "Thread conversation %s is in %s state, ignoring reply",
+                    thread_conversation.id,
+                    thread_conversation.status.value,
+                )
+                return None
 
         # Try to extract a ticket key from the message
         ticket_key = self._extract_ticket_key(text)

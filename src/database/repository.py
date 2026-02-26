@@ -184,6 +184,38 @@ class ConversationRepository:
 
         return self._row_to_conversation(row)
 
+    def get_by_thread_ts(
+        self, slack_channel_id: str, slack_thread_ts: str
+    ) -> ConversationState | None:
+        """Find a conversation by its Slack thread timestamp.
+
+        Used to match incoming thread replies to existing conversations
+        (e.g., escalation threads).
+
+        Args:
+            slack_channel_id: The Slack channel/DM ID.
+            slack_thread_ts: The Slack thread root timestamp.
+
+        Returns:
+            The matching ConversationState if found, None otherwise.
+        """
+        cursor = self._conn.execute(
+            """
+            SELECT * FROM conversations
+            WHERE slack_channel_id = ?
+              AND slack_thread_ts = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (slack_channel_id, slack_thread_ts),
+        )
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_conversation(row)
+
     def update(self, conversation: ConversationState) -> ConversationState:
         """Update an existing conversation record.
 
